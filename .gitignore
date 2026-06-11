@@ -1,0 +1,19 @@
+# Environment
+.venv/
+venv/
+env/
+.env
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data and Models
+# Comment these out if you intend to track the CSVs and the model file in Git
+# *.csv
+# *.pkl
+
+# OS files
+.DS_Store
+Thumbs.db

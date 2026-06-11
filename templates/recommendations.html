@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}Product Recommendations — Smart Retail Analytics{% endblock %}
+{% block breadcrumb %}Product Recommendations{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-header-crumb">🛍️ Smart Retail Analytics</div>
+  <h1>🤖 Product Recommendations</h1>
+  <p>Market-basket association rules — discover what customers frequently buy together</p>
+</div>
+
+<!-- ── Product selector form ── -->
+<div class="glass-card mb-4">
+  <div class="section-title"><i class="bi bi-search"></i> Select a Product</div>
+  <form method="POST" action="{{ url_for('recommendations') }}">
+    <div class="row align-items-end g-3">
+      <div class="col-md-7">
+        <label class="form-label-custom">Product to analyse</label>
+        <select name="product" class="select-custom">
+          <option value="">— choose a product —</option>
+          {% for p in all_products %}
+          <option value="{{ p }}"
+            {% if selected and p == selected %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <button type="submit" class="btn-primary-custom">
+          <i class="bi bi-stars me-2"></i>Get Recommendations
+        </button>
+      </div>
+      <div class="col-md-2" style="font-size:.78rem; color:#475569;">
+        {{ all_products|length }} products available
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- ── No product selected — overview ── -->
+{% if not selected %}
+<div class="alert-custom alert-info mb-4">
+  <i class="bi bi-info-circle-fill"></i>
+  <span>Select a product from the dropdown to see which items are frequently bought together, ranked by Lift score.</span>
+</div>
+
+{% if overview %}
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="overview-stat-card">
+      <div class="overview-stat-val" style="color:#6366f1;">{{ overview.total }}</div>
+      <div class="overview-stat-lbl"><i class="bi bi-list-ul me-1"></i>Total Rules Loaded</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="overview-stat-card" style="animation-delay:.08s;">
+      <div class="overview-stat-val" style="color:#a855f7;">{{ overview.max_lift }}×</div>
+      <div class="overview-stat-lbl"><i class="bi bi-lightning-fill me-1"></i>Max Lift Score</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="overview-stat-card" style="animation-delay:.16s;">
+      <div class="overview-stat-val" style="color:#06b6d4;">{{ overview.avg_conf }}</div>
+      <div class="overview-stat-lbl"><i class="bi bi-bullseye me-1"></i>Avg Confidence</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- ── Validation warning ── -->
+{% if rec_warning %}
+<div class="alert-custom alert-warn mb-3">
+  <i class="bi bi-exclamation-triangle-fill"></i>
+  <span>{{ rec_warning }}</span>
+</div>
+{% endif %}
+
+<!-- ── Results ── -->
+{% if selected and rec_cards %}
+
+<!-- Stats bar -->
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="kpi-card">
+      <div class="kpi-glow" style="background:#6366f1;"></div>
+      <span class="kpi-icon">📦</span>
+      <div class="kpi-label">Recommendations Found</div>
+      <div class="kpi-value">{{ stats.count }}</div>
+      <div class="kpi-delta positive"><i class="bi bi-arrow-up-short"></i> Products matched</div>
+      <div class="kpi-accent-bar" style="background:linear-gradient(90deg,#6366f1,transparent);"></div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="kpi-card">
+      <div class="kpi-glow" style="background:#a855f7;"></div>
+      <span class="kpi-icon">⚡</span>
+      <div class="kpi-label">Max Lift Score</div>
+      <div class="kpi-value">{{ stats.max_lift }}×</div>
+      <div class="kpi-delta positive"><i class="bi bi-arrow-up-short"></i> Strongest association</div>
+      <div class="kpi-accent-bar" style="background:linear-gradient(90deg,#a855f7,transparent);"></div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="kpi-card">
+      <div class="kpi-glow" style="background:#06b6d4;"></div>
+      <span class="kpi-icon">🎯</span>
+      <div class="kpi-label">Avg Confidence</div>
+      <div class="kpi-value" style="font-size:1.55rem;">{{ stats.avg_conf }}</div>
+      <div class="kpi-delta positive"><i class="bi bi-arrow-up-short"></i> Average rule reliability</div>
+      <div class="kpi-accent-bar" style="background:linear-gradient(90deg,#06b6d4,transparent);"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Selected product label -->
+<div class="mb-3" style="font-size:.82rem; color:#64748b; padding:.5rem .9rem;
+     background:rgba(255,255,255,.03); border-radius:8px; border-left:3px solid #6366f1;">
+  Recommendations for: <strong style="color:#a5b4fc;">{{ selected }}</strong>
+</div>
+
+<!-- Rec cards -->
+<div class="row g-4 mb-4">
+  <div class="col-lg-6">
+    <div class="glass-card">
+      <div class="section-title"><i class="bi bi-bag-check"></i> Recommended Products</div>
+      {% for card in rec_cards %}
+      <div class="rec-card" style="animation-delay:{{ loop.index0 * 0.04 }}s;">
+        <span class="rec-rank">#{{ card.rank }}</span>
+        <span class="rec-name">{{ card.product }}</span>
+        <span class="rec-lift"><i class="bi bi-lightning-fill"></i> {{ card.lift }}×</span>
+        <div class="rec-cbar">
+          <div class="rec-cfill" style="width:{{ card.conf_pct }}%;"></div>
+        </div>
+        <span class="rec-cpct">{{ card.conf }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Lift chart -->
+  <div class="col-lg-6">
+    <div class="glass-card">
+      <div class="section-title"><i class="bi bi-bar-chart-horizontal-fill"></i> Lift Score Comparison</div>
+      <div id="liftChart" class="chart-wrap"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Full rules table accordion -->
+<div class="accordion accordion-dark">
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" data-bs-toggle="collapse"
+              data-bs-target="#rulesCollapse">
+        <i class="bi bi-table me-2"></i> Full Rules Table
+      </button>
+    </h2>
+    <div id="rulesCollapse" class="accordion-collapse collapse">
+      <div class="accordion-body">
+        <div class="table-responsive">
+          <table class="table-dark-custom">
+            <thead>
+              <tr>
+                <th>#</th><th>Recommended Product</th>
+                <th>Confidence</th><th>Lift</th><th>Support</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for card in rec_cards %}
+              <tr>
+                <td style="color:#64748b;">{{ card.rank }}</td>
+                <td style="color:#f8fafc; font-weight:500;">{{ card.product }}</td>
+                <td style="color:#a5b4fc;">{{ card.conf }}</td>
+                <td style="color:#d8b4fe; font-weight:600;">{{ card.lift }}×</td>
+                <td style="color:#64748b;">{{ card.support }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block page_scripts %}
+{% if chart_lift %}
+<script>
+  renderChart('liftChart', {{ chart_lift | tojson }});
+</script>
+{% endif %}
+{% endblock %}
