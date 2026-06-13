@@ -40,7 +40,34 @@ When an authenticated user logs in for the first time with an empty database:
   - The system dynamically updates the customer's RFM (Recency, Frequency, Monetary) metrics.
   - *Data Flow*: Form -> `POST /add` -> Insert into `transactions` table -> Background ML Pipeline (optional) -> UI Update.
 
-## 4. Theme & Preferences Flow
+## 4. Machine Learning Integration
+The CRM is uniquely powered by background Machine Learning models that transform raw data into actionable business intelligence:
+
+### A. Customer Segmentation (KMeans)
+- **What it does**: Groups customers based on their RFM (Recency, Frequency, Monetary) metrics.
+- **UI Mapping**: Raw cluster IDs (0, 1, 2, 3) are mapped to business terms ("Best Customers", "Repeat Customers", "Standard Customers", "At Risk").
+- **Where it appears**: These labels are rendered as color-coded badges (`badge-vip` green, `badge-loyal` blue, etc.) on the Dashboard donut chart, the Customer Directory table, and Individual Customer Profiles.
+- **User Flow**: Retailers use these visual badges to instantly identify high-value clients and tailor their communication strategy.
+
+### B. Churn Prediction (Random Forest)
+- **What it does**: Calculates the probability (0.0 to 1.0) of a customer not returning.
+- **UI Mapping**: The raw probability score is bucketed into "Retention Risk" levels. A score >0.7 becomes "High Risk" (red alert), >0.4 is "Medium Risk" (amber warning), and the rest are "Low Risk".
+- **Where it appears**: Displayed prominently on the Dashboard's "Customers You May Lose" widget. In the Customer Profile, it triggers an actionable "Next Steps" card suggesting a retention campaign if the risk is High.
+- **User Flow**: Retailers click on high-risk profiles to intervene, using the UI prompts to send targeted discount codes.
+
+### C. Product Recommendations (Apriori)
+- **What it does**: Discovers association rules between products (e.g., "Customers who bought X also bought Y").
+- **UI Mapping**: The raw rules (antecedents -> consequents) along with Confidence and Lift scores are parsed into "Frequently Bought Together" product cards.
+- **Where it appears**: Shown on the `/recommendations` page as a searchable grid. On individual customer profiles, the UI checks the customer's purchase history and suggests matching consequents.
+- **User Flow**: Sales staff use the cross-sell section of a customer profile while a customer is viewing an item to suggest highly relevant additions, increasing average order value.
+
+### D. Demand Forecasting (Prophet)
+- **What it does**: Analyzes historical transaction volume to predict future revenue.
+- **UI Mapping**: The model's output dataframe (containing `ds`, `yhat`, `yhat_lower`, `yhat_upper`) is serialized into JSON. The UI uses Chart.js to render these as a multi-line graph: a solid purple line for expected sales, and dashed/shaded lines for confidence intervals.
+- **Where it appears**: Displayed as a 30-day "Expected Sales" interactive chart on the main Dashboard and a detailed view on the `/forecasting` page.
+- **User Flow**: Store managers review the Chart.js visual timeline to plan inventory, staffing levels, and financial projections for the upcoming month.
+
+## 5. Theme & Preferences Flow
 - **Theme Switcher**: Users click the top-right monitor icon to select Light, Dark, or System theme.
 - **Storage**: The preference is saved in `localStorage`.
 - **Render**: The JavaScript immediately sets `data-theme="light"` or `dark` on the `<html>` element. CSS variables adapt, and Chart.js instances are forcefully re-rendered to match the new text colors.
