@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Customer Activity Log{% endblock %}
+{% block page_title %}<i class="fa-solid fa-clock-rotate-left me-2" style="color:#8b5cf6"></i>Customer Activity Log{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Customer Activity Log</h1>
+  <p>All customer analyses — category and retention risk records.</p>
+</div>
+
+{% if not predictions %}
+<div class="glass-card empty-state">
+  <i class="fa-solid fa-inbox"></i>
+  <p>No activity yet. <a href="{{ url_for('customer_entry') }}" style="color:#8b5cf6">Add a customer</a> to get started.</p>
+</div>
+{% else %}
+
+{% set high = predictions | selectattr('retention_risk', 'equalto', 'High Retention Risk') | list %}
+{% set med  = predictions | selectattr('retention_risk', 'equalto', 'Medium Retention Risk') | list %}
+{% set low  = predictions | selectattr('retention_risk', 'equalto', 'Low Retention Risk') | list %}
+
+<div class="grid-4 mb-6">
+  <div class="glass-card text-center">
+    <div class="kpi-icon purple" style="margin:0 auto 10px"><i class="fa-solid fa-brain"></i></div>
+    <div class="kpi-value">{{ predictions|length }}</div>
+    <div class="kpi-label">Total Analyses</div>
+  </div>
+  <div class="glass-card text-center">
+    <div class="kpi-icon rose" style="margin:0 auto 10px"><i class="fa-solid fa-fire"></i></div>
+    <div class="kpi-value" style="color:#ef4444">{{ high|length }}</div>
+    <div class="kpi-label">High Retention Risk</div>
+  </div>
+  <div class="glass-card text-center">
+    <div class="kpi-icon amber" style="margin:0 auto 10px"><i class="fa-solid fa-exclamation"></i></div>
+    <div class="kpi-value" style="color:#f59e0b">{{ med|length }}</div>
+    <div class="kpi-label">Medium Retention Risk</div>
+  </div>
+  <div class="glass-card text-center">
+    <div class="kpi-icon green" style="margin:0 auto 10px"><i class="fa-solid fa-shield-check"></i></div>
+    <div class="kpi-value" style="color:#10b981">{{ low|length }}</div>
+    <div class="kpi-label">Low Retention Risk</div>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="glass-card mb-4">
+  <div class="row g-3 align-items-center">
+    <div class="col-md-4">
+      <input type="text" id="searchInput" class="form-control" placeholder="Search by Customer ID or category…">
+    </div>
+    <div class="col-md-3">
+      <select id="riskFilter" class="form-control">
+        <option value="">All Retention Risk Levels</option>
+        <option value="High Retention Risk">High Retention Risk</option>
+        <option value="Medium Retention Risk">Medium Retention Risk</option>
+        <option value="Low Retention Risk">Low Retention Risk</option>
+      </select>
+    </div>
+    <div class="col-md-3">
+      <select id="catFilter" class="form-control">
+        <option value="">All Customer Categories</option>
+        <option value="Best Customers">Best Customers</option>
+        <option value="Repeat Customers">Repeat Customers</option>
+        <option value="Standard Customers">Standard Customers</option>
+        <option value="Customers You May Lose">Customers You May Lose</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <button class="btn btn-outline w-100" onclick="clearFilters()"><i class="fa-solid fa-rotate-left"></i> Reset</button>
+    </div>
+  </div>
+</div>
+
+<div class="glass-card">
+  <div class="table-wrapper">
+    <table class="analytics-table" id="historyTable">
+      <thead>
+        <tr>
+          <th>Customer ID</th>
+          <th>Customer Category</th>
+          <th>Retention Risk</th>
+          <th>Risk %</th>
+          <th>Analysis Date</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tableBody">
+        {% for p in predictions %}
+        <tr data-risk="{{ p.retention_risk or '' }}" data-cat="{{ p.customer_category or '' }}" data-cid="{{ p.customer_id }}">
+          <td><a href="{{ url_for('customer_detail', customer_id=p.customer_id) }}" style="color:#8b5cf6;font-weight:600">{{ p.customer_id }}</a></td>
+          <td>
+            <span class="seg-badge badge-{{ 'vip' if 'Best' in (p.customer_category or '') else 'loyal' if 'Repeat' in (p.customer_category or '') else 'regular' if 'Standard' in (p.customer_category or '') else 'risk' if 'Lose' in (p.customer_category or '') else 'regular' }}" style="font-size:11px">
+              {{ p.customer_category or '—' }}
+            </span>
+          </td>
+          <td>
+            <span class="seg-badge badge-{{ 'risk' if 'High' in (p.retention_risk or '') else 'warn' if 'Medium' in (p.retention_risk or '') else 'safe' }}" style="font-size:11px">
+              {{ p.retention_risk or '—' }}
+            </span>
+          </td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div class="progress-track" style="width:70px">
+                <div class="progress-fill {{ 'red' if p.churn_probability>=0.7 else 'amber' if p.churn_probability>=0.4 else 'green' }}" style="width:{{ (p.churn_probability*100)|int }}%"></div>
+              </div>
+              <span style="font-size:12px;font-weight:600">{{ (p.churn_probability*100)|round(1) }}%</span>
+            </div>
+          </td>
+          <td class="text-muted text-sm">{{ p.prediction_time[:16] }}</td>
+          <td>
+            <a href="{{ url_for('customer_detail', customer_id=p.customer_id) }}" class="btn btn-outline btn-sm">
+              <i class="fa-solid fa-eye"></i>
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div id="noResults" class="empty-state" style="display:none">
+    <i class="fa-solid fa-magnifying-glass"></i><p>No results match your filters.</p>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function filterRows() {
+  const search = document.getElementById('searchInput').value.toLowerCase();
+  const risk   = document.getElementById('riskFilter').value;
+  const cat    = document.getElementById('catFilter').value;
+  const rows   = document.querySelectorAll('#tableBody tr');
+  let visible  = 0;
+  rows.forEach(row => {
+    const cid  = row.dataset.cid?.toLowerCase() || '';
+    const rcat = row.dataset.cat;
+    const rrisk= row.dataset.risk;
+    const show = cid.includes(search)
+              && (!risk || rrisk === risk)
+              && (!cat  || rcat  === cat);
+    row.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  document.getElementById('noResults').style.display = visible===0?'block':'none';
+}
+function clearFilters() {
+  document.getElementById('searchInput').value='';
+  document.getElementById('riskFilter').value='';
+  document.getElementById('catFilter').value='';
+  filterRows();
+}
+document.getElementById('searchInput')?.addEventListener('input', filterRows);
+document.getElementById('riskFilter')?.addEventListener('change', filterRows);
+document.getElementById('catFilter')?.addEventListener('change', filterRows);
+</script>
+{% endblock %}

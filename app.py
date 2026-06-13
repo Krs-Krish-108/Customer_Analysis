@@ -1,962 +1,872 @@
 """
-Smart Retail Customer Behavior Analytics Platform
-Flask + Bootstrap 5 Application
-=================================================
-Routes:
-  GET  /                   → Dashboard
-  GET/POST /insights        → Customer Insights (POST: look up a customer)
-  GET/POST /recommendations → Product Recommendations (POST: filter by product)
-  GET  /analytics           → Analytics (8 Plotly charts)
+app.py — RetailIQ Customer Management & Analytics Platform
+==========================================================
+All routes use retailer-friendly language. ML terms are hidden from the UI.
+
+Routes
+------
+GET  /                          → Landing page
+GET  /dashboard                 → Business KPI dashboard
+GET  /segmentation              → Customer Categories
+GET  /churn                     → Customer Retention
+GET/POST /recommendations       → Frequently Bought Together
+GET  /forecasting               → Expected Sales forecast
+GET/POST /customer-entry        → Add customer / record purchase
+GET  /upload-dataset            → Batch CSV import
+GET  /history                   → Customer Activity Log
+GET  /customers                 → Customer Directory
+GET  /customers/top             → Top Customers
+GET  /customer/<customer_id>    → Customer Profile (mini-CRM)
+GET/POST /customer-search       → Customer Search
+GET  /api/next-customer-id      → Next auto CUST ID (JSON)
+GET  /api/search-customers      → Autocomplete search (JSON)
+POST /api/predict               → JSON prediction endpoint
+GET  /api/forecast              → JSON forecast data
+GET  /api/dashboard-stats       → JSON KPI stats
 """
 
+import io
 import json
-import re
 import warnings
-import sqlite3
-import datetime
-import random
+from datetime import date
 
-import joblib
-import numpy as np
 import pandas as pd
-import plotly
-import plotly.express as px
-import plotly.graph_objects as go
-from flask import Flask, render_template, request
+from flask import (Flask, Response, jsonify, redirect,
+                   render_template, request, url_for, session, flash)
+from functools import wraps
 
-from nba_engine import NBAEngine
+from utils.database import (
+    init_db,
+    generate_next_customer_id,
+    customer_id_exists,
+    save_customer_record,
+    save_transaction,
+    save_prediction,
+    get_customer_by_id,
+    get_customer_stats,
+    search_customers_autocomplete,
+    get_customer_transactions,
+    compute_customer_rfm,
+    get_customer_predictions,
+    get_latest_prediction,
+    get_all_predictions,
+    get_all_customers_with_stats,
+    get_top_customers,
+    create_user,
+    verify_user,
+    count_users,
+)
+from utils.preprocessing import (
+    load_customer_segments,
+    load_churn_data,
+    load_recommendation_rules,
+    load_cluster_summary,
+    load_dashboard_summary,
+    compute_rfm_from_upload,
+)
+from utils.segmentation import (
+    predict_segment, models_loaded as seg_loaded,
+    SEGMENT_COLORS, SEGMENT_LABEL_MAP, SEGMENT_ACTIONS,
+)
+from utils.churn import predict_churn, model_loaded as churn_loaded, RISK_ACTIONS
+from utils.recommendation import get_all_products, get_recommendations, get_overview
+from utils.forecasting import get_forecast_series, get_forecast_summary
 
 warnings.filterwarnings("ignore")
 
+# ── App setup ──────────────────────────────────────────────────────────────
 app = Flask(__name__)
+app.secret_key = "retailiq-super-secret-key-change-in-production"
+init_db()
 
-# ── Design constants ───────────────────────────────────────────────────────
-SEGMENT_COLORS = {
-    "VIP":     "#a855f7",
-    "Regular": "#10b981",
-    "At Risk": "#ef4444",
-}
+# ── Auth Decorator ─────────────────────────────────────────────────────────
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "user_id" not in session:
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated_function
 
-# Base Plotly dark-theme layout (no xaxis/yaxis/legend — added per chart)
-_PLOTLY_BASE = dict(
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(family="Inter, sans-serif", color="#94a3b8", size=13),
-    margin=dict(l=60, r=60, t=60, b=60),
-    title_font=dict(color="#e2e8f0", size=15, family="Inter, sans-serif"),
-    hoverlabel=dict(
-        bgcolor="rgba(8,14,26,0.96)",
-        bordercolor="rgba(99,102,241,0.45)",
-        font=dict(family="Inter, sans-serif", color="#f8fafc", size=13),
-    ),
-)
+# ── Global dataset data (loaded once at startup) ───────────────────────────
+DF_SEGMENTS = load_customer_segments()
+DF_CHURN    = load_churn_data()
+DF_RULES    = load_recommendation_rules()
+DF_CLUSTER  = load_cluster_summary()
 
-_AXIS = dict(
-    gridcolor="rgba(255,255,255,0.07)",
-    linecolor="rgba(255,255,255,0.10)",
-    zerolinecolor="rgba(255,255,255,0.07)",
-    tickfont=dict(color="#94a3b8", size=12),
-)
-
-_LEGEND = dict(
-    bgcolor="rgba(8,14,26,0.88)",
-    bordercolor="rgba(255,255,255,0.07)",
-    borderwidth=1,
-    font=dict(color="#cbd5e1", size=12),
-)
+# ── Friendly label map for templates ──────────────────────────────────────
+ALL_CATEGORIES = list(SEGMENT_LABEL_MAP.values())
+ALL_RISKS      = ["High Retention Risk", "Medium Retention Risk", "Low Retention Risk"]
 
 
-def _layout(**extra):
-    """Merge base layout with per-chart overrides."""
-    base = dict(**_PLOTLY_BASE)
-    base["xaxis"] = dict(**_AXIS)
-    base["yaxis"] = dict(**_AXIS)
-    base["legend"] = dict(**_LEGEND)
-    base.update(extra)
-    return base
-
-
-def _layout_no_xy(**extra):
-    """Layout for pie/donut/polar charts (no axes)."""
-    base = dict(**_PLOTLY_BASE)
-    base["legend"] = dict(**_LEGEND)
-    base.update(extra)
-    return base
-
-
-# ── Data loading ───────────────────────────────────────────────────────────
-
-def _clean_frozenset(val) -> str:
-    if pd.isna(val):
-        return ""
-    val = str(val)
-    val = re.sub(r"frozenset\(\{?", "", val)
-    val = re.sub(r"\}?\)", "", val)
-    val = val.replace('"', "").replace("'", "").strip(", ").strip()
-    return val
-
-
-def _load_data():
-    conn = sqlite3.connect("database.db")
-    try:
-        # Try loading from the database
-        df_c = pd.read_sql_query("SELECT * FROM customer_segments", conn)
-        if "Segments" in df_c.columns:
-            df_c.rename(columns={"Segments": "Segment"}, inplace=True)
-        df_c.columns = [c.strip() for c in df_c.columns]
-        df_c["CustomerID"] = pd.to_numeric(df_c["CustomerID"], errors="coerce")
-        df_c.dropna(subset=["CustomerID"], inplace=True)
-        df_c["CustomerID"] = df_c["CustomerID"].astype(int)
-    except Exception:
-        # If table doesn't exist, try seeding from CSV
-        try:
-            df_c = pd.read_csv("customer_segments.csv")
-            if "Segments" in df_c.columns:
-                df_c.rename(columns={"Segments": "Segment"}, inplace=True)
-            df_c.columns = [c.strip() for c in df_c.columns]
-            df_c["CustomerID"] = pd.to_numeric(df_c["CustomerID"], errors="coerce")
-            df_c.dropna(subset=["CustomerID"], inplace=True)
-            df_c["CustomerID"] = df_c["CustomerID"].astype(int)
-            # Create the SQLite table from the CSV
-            df_c.to_sql("customer_segments", conn, if_exists="replace", index=False)
-        except Exception:
-            # If both fail, initialize empty DB schema
-            df_c = pd.DataFrame(columns=["CustomerID", "Recency", "Frequency", "Monetary", "Cluster", "Segment"])
-            df_c.to_sql("customer_segments", conn, if_exists="replace", index=False)
-    finally:
-        conn.close()
-
-    try:
-        df_r = pd.read_csv("recommendation_rules.csv")
-        df_r.columns = [c.strip() for c in df_r.columns]
-        df_r["antecedents_clean"] = df_r["antecedents"].apply(_clean_frozenset)
-        df_r["consequents_clean"] = df_r["consequents"].apply(_clean_frozenset)
-        df_r = df_r[df_r["antecedents_clean"].str.len() > 0].reset_index(drop=True)
-    except FileNotFoundError:
-        df_r = pd.DataFrame()
-
-    try:
-        model = joblib.load("kmeans_model.pkl")
-    except Exception:
-        model = None
-
-    return df_c, df_r, model
-
-
-# Load once at startup
-DF_CUSTOMERS, DF_RULES, KMEANS_MODEL = _load_data()
-NBA_ENGINE = NBAEngine(DF_CUSTOMERS, DF_RULES)
-
-
-# ── Utilities ──────────────────────────────────────────────────────────────
-
-def to_json(fig) -> str:
-    """Serialise a Plotly figure to JSON for the template."""
-    return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
-
-
-def fmt_gbp(v: float) -> str:
-    return f"£{v:,.2f}"
-
-
-_INTELLIGENCE = {
-    "VIP": {
-        "icon": "bi-gem",
-        "icon_color": "#c084fc",
-        "color": "#c084fc",
-        "bg": "rgba(192,132,252,0.1)",
-        "border": "rgba(192,132,252,0.3)",
-        "title": "VIP Customer — High Value",
-        "body": (
-            "This customer ranks among your top performers with high purchase frequency "
-            "and significant lifetime value. Prioritise them with exclusive loyalty tiers, "
-            "early-access launches, VIP events, and personalised account management. "
-            "Small improvements in VIP retention yield outsized revenue returns."
-        ),
-    },
-    "Regular": {
-        "icon": "bi-cart3",
-        "icon_color": "#34d399",
-        "color": "#34d399",
-        "bg": "rgba(52,211,153,0.1)",
-        "border": "rgba(52,211,153,0.3)",
-        "title": "Regular Customer — Steady Engagement",
-        "body": (
-            "An active, reliable buyer who consistently engages with your brand. "
-            "Cross-sell complementary products, run frequency-based incentive programs, "
-            "and send personalised promotions to motivate this customer toward VIP status. "
-            "Targeted communications can significantly increase basket size."
-        ),
-    },
-    "At Risk": {
-        "icon": "bi-exclamation-triangle",
-        "icon_color": "#fb7185",
-        "color": "#fb7185",
-        "bg": "rgba(251,113,133,0.1)",
-        "border": "rgba(251,113,133,0.3)",
-        "title": "At-Risk Customer — Needs Intervention",
-        "body": (
-            "This customer's purchase recency is high — they may be disengaging or churning. "
-            "Deploy a win-back campaign immediately: time-limited discount, free shipping, "
-            "or a personalised product recommendation. Early intervention dramatically "
-            "increases re-activation probability before churn becomes permanent."
-        ),
-    },
-}
-
-
-# ── Context processor — sidebar stats available on every page ──────────────
+# ── Context processor ─────────────────────────────────────────────────────
 @app.context_processor
-def inject_sidebar_stats():
-    if DF_CUSTOMERS.empty:
-        return dict(sb_total="—", sb_vip="—", sb_regular="—",
-                    sb_atrisk="—", sb_rules="—")
-    df = DF_CUSTOMERS
+def inject_globals():
+    df = DF_SEGMENTS
+    if df.empty:
+        return dict(
+            sb_total="—", sb_best="—", sb_repeat="—",
+            sb_standard="—", sb_losing="—", sb_pairs="—",
+            seg_loaded=False, churn_loaded=False,
+        )
     return dict(
-        sb_total=f"{len(df):,}",
-        sb_vip=f"{len(df[df['Segment'] == 'VIP']):,}",
-        sb_regular=f"{len(df[df['Segment'] == 'Regular']):,}",
-        sb_atrisk=f"{len(df[df['Segment'] == 'At Risk']):,}",
-        sb_rules=f"{len(DF_RULES):,}" if not DF_RULES.empty else "0",
+        sb_total    = f"{len(df):,}",
+        sb_best     = f"{len(df[df['Segment']=='VIP']):,}",
+        sb_repeat   = f"{len(df[df['Segment']=='Loyal']):,}",
+        sb_standard = f"{len(df[df['Segment']=='Regular']):,}",
+        sb_losing   = f"{len(df[df['Segment']=='At Risk']):,}",
+        sb_pairs    = f"{len(DF_RULES):,}" if not DF_RULES.empty else "0",
+        seg_loaded  = seg_loaded(),
+        churn_loaded= churn_loaded(),
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# ROUTE  0 — LANDING HOME PAGE
-# ═══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+# AUTHENTICATION
+# ══════════════════════════════════════════════════════════════════════════
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if "user_id" in session:
+        return redirect(url_for("dashboard"))
+        
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        
+        if verify_user(username, password):
+            session["user_id"] = username
+            return redirect(url_for("dashboard"))
+        else:
+            error = "Invalid username or password"
+            
+    return render_template("login.html", error=error, has_users=(count_users() > 0))
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    # Optional: only allow registration if no users exist, or allow anytime.
+    # For this demo, we allow creating users anytime.
+    if "user_id" in session:
+        return redirect(url_for("dashboard"))
+        
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        
+        if not username or not password:
+            error = "Username and password are required."
+        elif create_user(username, password):
+            session["user_id"] = username
+            return redirect(url_for("dashboard"))
+        else:
+            error = "Username already exists."
+            
+    return render_template("register.html", error=error)
+
+@app.route("/logout")
+def logout():
+    session.pop("user_id", None)
+    return redirect(url_for("login"))
+
+# ══════════════════════════════════════════════════════════════════════════
+# LANDING PAGE
+# ══════════════════════════════════════════════════════════════════════════
 @app.route("/")
 def index():
-    return render_template("home.html")
+    summary = load_dashboard_summary()
+    return render_template("index.html", active_page="home", summary=summary)
 
-# ═══════════════════════════════════════════════════════════════════════════
-# ROUTE UPDATE DB
-# ═══════════════════════════════════════════════════════════════════════════
-
-@app.route("/update-db", methods=["GET", "POST"])
-def update_db():
-    global DF_CUSTOMERS, DF_RULES, KMEANS_MODEL, NBA_ENGINE
-    message = None
-    if request.method == "POST":
-        action = request.form.get("action")
-        
-        if action == "manual_entry":
-            try:
-                # Extract form data
-                cid = int(request.form.get("customer_id"))
-                rec = float(request.form.get("recency"))
-                freq = float(request.form.get("frequency"))
-                mon = float(request.form.get("monetary"))
-                clust = int(request.form.get("cluster"))
-                seg = request.form.get("segment")
-                
-                # Check valid segment
-                if seg not in ["VIP", "Regular", "At Risk"]:
-                    raise ValueError("Invalid Segment value.")
-                
-                # Get current dataframe from memory
-                df = DF_CUSTOMERS.copy()
-                is_update = cid in df["CustomerID"].values
-                
-                # Update or Append
-                if is_update:
-                    df.loc[df["CustomerID"] == cid, ["Recency", "Frequency", "Monetary", "Cluster", "Segment"]] = [rec, freq, mon, clust, seg]
-                else:
-                    new_row = pd.DataFrame([{
-                        "CustomerID": cid, "Recency": rec, "Frequency": freq,
-                        "Monetary": mon, "Cluster": clust, "Segment": seg
-                    }])
-                    df = pd.concat([df, new_row], ignore_index=True)
-                
-                # Ensure data types
-                df["CustomerID"] = df["CustomerID"].astype(int)
-                
-                # Save to CSV
-                df.to_csv("customer_segments.csv", index=False)
-                
-                # Save to SQLite
-                conn = sqlite3.connect("database.db")
-                df.to_sql("customer_segments", conn, if_exists="replace", index=False)
-                conn.close()
-                
-                # Refresh global state
-                DF_CUSTOMERS, DF_RULES, KMEANS_MODEL = _load_data()
-                NBA_ENGINE = NBAEngine(DF_CUSTOMERS, DF_RULES)
-                
-                message = f"Customer {cid} successfully {'updated' if is_update else 'added'}!"
-            except Exception as e:
-                message = f"Error processing manual entry: {str(e)}"
-                
-        else:
-            # File Upload Logic
-            if "dataset" not in request.files:
-                message = "No file part in the request."
-            else:
-                file = request.files["dataset"]
-                if file.filename == "":
-                    message = "No selected file."
-                elif file and file.filename.endswith(".csv"):
-                    try:
-                        df = pd.read_csv(file)
-                        required_cols = ["CustomerID", "Recency", "Frequency", "Monetary", "Cluster", "Segment"]
-                        missing_cols = [c for c in required_cols if c not in df.columns]
-                        
-                        if missing_cols:
-                            message = f"Invalid CSV. Missing columns: {', '.join(missing_cols)}"
-                        else:
-                            # Save to CSV
-                            df.to_csv("customer_segments.csv", index=False)
-                            
-                            # Save to SQLite
-                            conn = sqlite3.connect("database.db")
-                            df.to_sql("customer_segments", conn, if_exists="replace", index=False)
-                            conn.close()
-                            
-                            # Refresh global state
-                            DF_CUSTOMERS, DF_RULES, KMEANS_MODEL = _load_data()
-                            NBA_ENGINE = NBAEngine(DF_CUSTOMERS, DF_RULES)
-                            
-                            message = "Database updated successfully from file!"
-                    except Exception as e:
-                        message = f"Error processing file: {str(e)}"
-                else:
-                    message = "Please upload a valid CSV file."
-    
-    return render_template("update_db.html", active_page="update_db", message=message)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ROUTE  1 — DASHBOARD
-# ═══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+# DASHBOARD
+# ══════════════════════════════════════════════════════════════════════════
 @app.route("/dashboard")
+@login_required
 def dashboard():
-    df = DF_CUSTOMERS
+    summary  = load_dashboard_summary()
+    df       = DF_SEGMENTS
+    churn_df = DF_CHURN
+
     if df.empty:
-        return render_template("dashboard.html", active_page="dashboard", error=True)
+        return render_template("dashboard.html", active_page="dashboard",
+                               error=True, summary=summary)
 
-    total      = len(df)
-    vip_count  = len(df[df["Segment"] == "VIP"])
-    reg_count  = len(df[df["Segment"] == "Regular"])
-    risk_count = len(df[df["Segment"] == "At Risk"])
-
+    # Category breakdown (friendly labels)
     seg_counts = df["Segment"].value_counts().reset_index()
     seg_counts.columns = ["Segment", "Count"]
+    total = len(df)
 
-    # ── Donut chart ────────────────────────────────────────────────────────
-    fig_donut = go.Figure(go.Pie(
-        labels=seg_counts["Segment"],
-        values=seg_counts["Count"],
-        hole=0.62,
-        marker=dict(
-            colors=[SEGMENT_COLORS.get(s, "#6366f1") for s in seg_counts["Segment"]],
-            line=dict(color="rgba(0,0,0,0)", width=0),
-        ),
-        textinfo="label+percent",
-        textfont=dict(color="#f8fafc", size=12),
-        hovertemplate="<b>%{label}</b><br>%{value:,} customers · %{percent}<extra></extra>",
-        pull=[0.05 if s == "VIP" else 0 for s in seg_counts["Segment"]],
-    ))
-    fig_donut.add_annotation(
-        text=f"<b>{total:,}</b><br>Total",
-        x=0.5, y=0.5,
-        font=dict(size=18, color="#f8fafc", family="Inter"),
-        showarrow=False,
-    )
-    fig_donut.update_layout(
-        **_layout_no_xy(
-            height=360,
-            showlegend=True,
-            legend=dict(orientation="h", y=-0.08, x=0.5, xanchor="center",
-                        **{k: v for k, v in _LEGEND.items() if k != "orientation"}),
-        )
-    )
+    seg_breakdown = []
+    for _, row in seg_counts.iterrows():
+        friendly = SEGMENT_LABEL_MAP.get(row["Segment"], row["Segment"])
+        seg_breakdown.append({
+            "segment":  row["Segment"],
+            "category": friendly,
+            "count":    int(row["Count"]),
+            "pct":      round(row["Count"] / total * 100, 1),
+            "color":    SEGMENT_COLORS.get(friendly, "#64748b"),
+            "actions":  SEGMENT_ACTIONS.get(friendly, []),
+        })
 
-    # ── Revenue bar chart ──────────────────────────────────────────────────
-    rev_df = df.groupby("Segment")["Monetary"].sum().reset_index()
-    rev_df.columns = ["Segment", "Total Sales (£)"]
-    rev_df = rev_df.sort_values("Total Sales (£)", ascending=False)
-    fig_rev = px.bar(
-        rev_df, x="Segment", y="Total Sales (£)",
-        color="Segment", color_discrete_map=SEGMENT_COLORS,
-        title="💰 Total Sales Revenue by Customer Group",
-        text=rev_df["Total Sales (£)"].map(lambda v: f"£{v:,.0f}"),
-    )
-    fig_rev.update_traces(textposition="outside", marker_line_width=0, width=0.45,
-                          textfont=dict(color="#f1f5f9", size=12))
-    fig_rev.update_layout(**_layout(height=340, showlegend=False, yaxis_title="Total Sales (£)"))
+    # Retention stats
+    churn_total = len(churn_df) if not churn_df.empty else 0
+    at_risk_count = int(churn_df["Churn"].sum()) if not churn_df.empty and "Churn" in churn_df.columns else 0
+    retention_rate = round((churn_total - at_risk_count) / churn_total * 100, 1) if churn_total else 0
 
-    # ── Summary statistics ─────────────────────────────────────────────────
-    summary = (
-        df.groupby("Segment")
-        .agg(
-            Customers=("CustomerID", "count"),
-            Avg_Recency=("Recency", "mean"),
-            Avg_Frequency=("Frequency", "mean"),
-            Avg_Monetary=("Monetary", "mean"),
-            Total_Revenue=("Monetary", "sum"),
-        )
-        .round(2)
-        .reset_index()
-    )
+    # Revenue by category
+    rev_by_segment = []
+    for _, row in df.groupby("Segment")["Monetary"].sum().reset_index().iterrows():
+        friendly = SEGMENT_LABEL_MAP.get(row["Segment"], row["Segment"])
+        rev_by_segment.append({
+            "category": friendly,
+            "Revenue":  round(float(row["Monetary"]), 2),
+            "color":    SEGMENT_COLORS.get(friendly, "#64748b"),
+        })
 
-    # Segment breakdown data for progress bars
-    seg_breakdown = [
-        {
-            "segment": row["Segment"],
-            "count": int(row["Count"]),
-            "pct": round(row["Count"] / total * 100, 1),
-            "color": SEGMENT_COLORS.get(row["Segment"], "#6366f1"),
-        }
-        for _, row in seg_counts.iterrows()
-    ]
+    cluster_rows = DF_CLUSTER.to_dict("records") if not DF_CLUSTER.empty else []
+    forecast_preview = get_forecast_series(days=30)
 
     return render_template(
         "dashboard.html",
-        active_page="dashboard",
-        total=f"{total:,}",
-        vip_count=f"{vip_count:,}",
-        reg_count=f"{reg_count:,}",
-        risk_count=f"{risk_count:,}",
-        vip_pct=f"{vip_count/total*100:.1f}",
-        reg_pct=f"{reg_count/total*100:.1f}",
-        risk_pct=f"{risk_count/total*100:.1f}",
-        avg_ltv=fmt_gbp(df["Monetary"].mean()),
-        total_rev=fmt_gbp(df["Monetary"].sum()),
-        seg_breakdown=seg_breakdown,
-        chart_donut=to_json(fig_donut),
-        chart_rev=to_json(fig_rev),
-        summary=summary.to_dict("records"),
-        is_high_risk=risk_count / total > 0.30,
-        risk_pct_str=f"{risk_count/total:.0%}",
+        active_page        = "dashboard",
+        summary            = summary,
+        seg_breakdown      = seg_breakdown,
+        rev_by_segment     = rev_by_segment,
+        at_risk_count      = at_risk_count,
+        retention_rate     = retention_rate,
+        cluster_rows       = cluster_rows,
+        forecast_preview   = json.dumps(forecast_preview),
+        seg_breakdown_json = json.dumps(seg_breakdown),
+        rev_json           = json.dumps(rev_by_segment),
+        risk_actions       = RISK_ACTIONS.get("High Retention Risk", []),
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# ROUTE  2 — CUSTOMER INSIGHTS
-# ═══════════════════════════════════════════════════════════════════════════
-@app.route("/insights", methods=["GET", "POST"])
-def insights():
-    df = DF_CUSTOMERS
-    customer = None
-    form_error = None
-    form_warning = None
-    cid_value = ""
+# ══════════════════════════════════════════════════════════════════════════
+# CUSTOMER CATEGORIES (was: segmentation)
+# ══════════════════════════════════════════════════════════════════════════
+@app.route("/segmentation")
+@login_required
+def segmentation():
+    df = DF_SEGMENTS
+    if df.empty:
+        return render_template("segmentation.html", active_page="segmentation", error=True)
+
+    total = len(df)
+    seg_counts = df["Segment"].value_counts().reset_index()
+    seg_counts.columns = ["Segment", "Count"]
+
+    seg_data = []
+    for _, row in seg_counts.iterrows():
+        friendly = SEGMENT_LABEL_MAP.get(row["Segment"], row["Segment"])
+        sub = df[df["Segment"] == row["Segment"]]
+        seg_data.append({
+            "segment":       row["Segment"],
+            "category":      friendly,
+            "count":         int(row["Count"]),
+            "pct":           round(row["Count"] / total * 100, 1),
+            "color":         SEGMENT_COLORS.get(friendly, "#64748b"),
+            "avg_recency":   round(sub["Recency"].mean(), 1),
+            "avg_frequency": round(sub["Frequency"].mean(), 1),
+            "avg_monetary":  round(sub["Monetary"].mean(), 2),
+            "total_revenue": round(sub["Monetary"].sum(), 2),
+            "actions":       SEGMENT_ACTIONS.get(friendly, []),
+        })
+
+    cluster_rows = DF_CLUSTER.to_dict("records") if not DF_CLUSTER.empty else []
 
     sample = (
-        df.sample(min(12, len(df)), random_state=99)
+        df.sample(min(20, total), random_state=42)
         [["CustomerID", "Segment", "Recency", "Frequency", "Monetary"]]
         .sort_values("Segment")
         .to_dict("records")
-        if not df.empty else []
     )
-    id_range = {
-        "min": int(df["CustomerID"].min()) if not df.empty else 0,
-        "max": int(df["CustomerID"].max()) if not df.empty else 0,
-        "total": len(df),
-    }
-
-    if request.method == "POST":
-        raw = request.form.get("customer_id", "").strip()
-        cid_value = raw
-        if not raw:
-            form_error = "Please enter a CustomerID."
-        else:
-            try:
-                cid = int(float(raw))
-                row_df = df[df["CustomerID"] == cid]
-                if row_df.empty:
-                    form_warning = f"Customer ID {cid:,} was not found. Try a different ID."
-                else:
-                    r   = row_df.iloc[0]
-                    seg = r["Segment"]
-                    clr = SEGMENT_COLORS.get(seg, "#6366f1")
-
-                    r_pct = 1.0 - (r["Recency"]  / df["Recency"].max())
-                    f_pct =        r["Frequency"] / df["Frequency"].max()
-                    m_pct =        r["Monetary"]  / df["Monetary"].max()
-                    pct_rank = (df["Monetary"] < r["Monetary"]).mean()
-
-                    # Radar chart
-                    cats = ["Recency", "Frequency", "Monetary", "Recency"]
-                    vals = [round(r_pct, 3), round(f_pct, 3), round(m_pct, 3), round(r_pct, 3)]
-                    # Convert hex color to rgba for fillcolor (8-digit hex not supported by Plotly)
-                    def _hex_to_rgba(hex_color, alpha=0.12):
-                        h = hex_color.lstrip('#')
-                        r_c, g_c, b_c = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-                        return f"rgba({r_c},{g_c},{b_c},{alpha})"
-
-                    fig_radar = go.Figure(go.Scatterpolar(
-                        r=vals, theta=cats, fill="toself",
-                        fillcolor=_hex_to_rgba(clr, 0.12),
-                        line=dict(color=clr, width=2.5),
-                        marker=dict(size=8, color=clr),
-                        hovertemplate="%{theta}: <b>%{r:.0%}</b><extra></extra>",
-                    ))
-                    fig_radar.update_layout(
-                        polar=dict(
-                            bgcolor="rgba(0,0,0,0)",
-                            radialaxis=dict(
-                                visible=True, range=[0, 1],
-                                gridcolor="rgba(255,255,255,0.05)",
-                                linecolor="rgba(255,255,255,0.05)",
-                                tickfont=dict(color="#475569", size=9),
-                                tickformat=".0%",
-                            ),
-                            angularaxis=dict(
-                                gridcolor="rgba(255,255,255,0.05)",
-                                linecolor="rgba(255,255,255,0.05)",
-                                tickfont=dict(color="#94a3b8", size=12, family="Inter"),
-                            ),
-                        ),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        font=dict(family="Inter", color="#94a3b8"),
-                        height=310, showlegend=False,
-                        margin=dict(l=40, r=40, t=20, b=20),
-                    )
-
-                    customer = {
-                        "id":         cid,
-                        "segment":    seg,
-                        "color":      clr,
-                        "icon":       {"VIP": "bi-gem", "Regular": "bi-cart3",
-                                       "At Risk": "bi-exclamation-triangle"}.get(seg, "bi-person"),
-                        "seg_class":  {"VIP": "seg-vip", "Regular": "seg-reg",
-                                       "At Risk": "seg-risk"}.get(seg, "seg-reg"),
-                        "recency":    int(r["Recency"]),
-                        "frequency":  int(r["Frequency"]),
-                        "monetary":   fmt_gbp(r["Monetary"]),
-                        "r_pct":      round(r_pct * 100, 1),
-                        "f_pct":      round(f_pct * 100, 1),
-                        "m_pct":      round(m_pct * 100, 1),
-                        "top_pct":    f"{100 - pct_rank*100:.0f}",
-                        "avg_recency":  f"{df['Recency'].mean():.0f}",
-                        "avg_frequency": f"{df['Frequency'].mean():.1f}",
-                        "avg_monetary":  fmt_gbp(df["Monetary"].mean()),
-                        "chart_radar":   to_json(fig_radar),
-                        "intel":         _INTELLIGENCE.get(seg, _INTELLIGENCE["Regular"]),
-                    }
-            except (ValueError, TypeError):
-                form_error = "Please enter a valid numeric CustomerID."
+    # Translate segment in sample
+    for r in sample:
+        r["category"] = SEGMENT_LABEL_MAP.get(r["Segment"], r["Segment"])
 
     return render_template(
-        "insights.html",
-        active_page="insights",
-        customer=customer,
-        form_error=form_error,
-        form_warning=form_warning,
-        cid_value=cid_value,
-        sample=sample,
-        id_range=id_range,
+        "segmentation.html",
+        active_page    = "segmentation",
+        seg_data       = seg_data,
+        seg_data_json  = json.dumps(seg_data),
+        cluster_rows   = cluster_rows,
+        sample         = sample,
+        total          = total,
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# ROUTE  3 — PRODUCT RECOMMENDATIONS
-# ═══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+# CUSTOMER RETENTION (was: churn)
+# ══════════════════════════════════════════════════════════════════════════
+@app.route("/churn")
+@login_required
+def churn():
+    df = DF_CHURN
+    if df.empty:
+        return render_template("churn.html", active_page="churn", error=True)
+
+    total    = len(df)
+    churned  = int(df["Churn"].sum()) if "Churn" in df.columns else 0
+    retained = total - churned
+    churn_rate = round(churned / total * 100, 1) if total else 0
+
+    churn_seg_data = []
+    if "Segment" in df.columns and "Churn" in df.columns:
+        gdf = (
+            df.groupby("Segment")["Churn"]
+            .agg(["sum", "count"])
+            .reset_index()
+            .rename(columns={"sum": "Churned", "count": "Total"})
+        )
+        for _, row in gdf.iterrows():
+            friendly = SEGMENT_LABEL_MAP.get(row["Segment"], row["Segment"])
+            churn_seg_data.append({
+                "segment":  row["Segment"],
+                "category": friendly,
+                "Churned":  int(row["Churned"]),
+                "Total":    int(row["Total"]),
+                "ChurnRate":round(row["Churned"] / row["Total"] * 100, 1),
+                "color":    SEGMENT_COLORS.get(friendly, "#64748b"),
+            })
+
+    at_risk_table = []
+    if "ChurnRisk" in df.columns:
+        at_risk = df[df["ChurnRisk"] >= 0.70].nlargest(20, "ChurnRisk")
+        for _, row in at_risk.iterrows():
+            friendly = SEGMENT_LABEL_MAP.get(row.get("Segment", ""), row.get("Segment", ""))
+            at_risk_table.append({
+                "CustomerID": int(row["CustomerID"]),
+                "category":   friendly,
+                "Recency":    row.get("Recency", 0),
+                "Frequency":  row.get("Frequency", 0),
+                "Monetary":   row.get("Monetary", 0),
+                "ChurnRisk":  row.get("ChurnRisk", 0),
+            })
+
+    return render_template(
+        "churn.html",
+        active_page    = "churn",
+        total          = total,
+        churned        = churned,
+        retained       = retained,
+        churn_rate     = churn_rate,
+        churn_seg_data = churn_seg_data,
+        churn_seg_json = json.dumps(churn_seg_data),
+        at_risk_table  = at_risk_table,
+        risk_actions   = RISK_ACTIONS.get("High Retention Risk", []),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# FREQUENTLY BOUGHT TOGETHER (was: recommendations)
+# ══════════════════════════════════════════════════════════════════════════
 @app.route("/recommendations", methods=["GET", "POST"])
+@login_required
 def recommendations():
-    df = DF_RULES
-    all_products = sorted(
-        [p for p in df["antecedents_clean"].dropna().unique() if p]
-    ) if not df.empty else []
-
-    selected      = None
-    rec_cards     = []
-    chart_lift    = None
-    stats         = {}
-    rec_warning   = None
-
-    overview = {}
-    if not df.empty:
-        overview = {
-            "total": len(df),
-            "max_lift": f"{df['lift'].max():.2f}",
-            "avg_conf": f"{df['confidence'].mean():.1%}",
-        }
+    df           = DF_RULES
+    all_products = get_all_products(df)
+    overview     = get_overview(df)
+    selected     = None
+    rec_cards    = []
+    rec_warning  = None
+    stats        = {}
 
     if request.method == "POST":
         selected = request.form.get("product", "").strip()
         if selected:
-            matching = (
-                df[df["antecedents_clean"] == selected]
-                .copy()
-                .sort_values("lift", ascending=False)
-                .reset_index(drop=True)
-            )
-            if matching.empty:
-                rec_warning = f"No recommendations found for '{selected}'. Try a different product."
+            rec_cards = get_recommendations(df, selected)
+            if not rec_cards:
+                rec_warning = f"No product pairings found for '{selected}'."
             else:
                 stats = {
-                    "count":    len(matching),
-                    "max_lift": f"{matching['lift'].max():.2f}",
-                    "avg_conf": f"{matching['confidence'].mean():.1%}",
+                    "count":    len(rec_cards),
+                    "max_lift": max(r["lift_float"] for r in rec_cards),
+                    "avg_conf": f"{sum(r['conf_pct'] for r in rec_cards)/len(rec_cards):.1f}%",
                 }
-                rec_cards = [
-                    {
-                        "rank":     i + 1,
-                        "product":  row["consequents_clean"],
-                        "lift":     f"{row['lift']:.2f}",
-                        "conf":     f"{row['confidence']:.1%}",
-                        "conf_pct": round(row["confidence"] * 100, 1),
-                        "support":  f"{row['support']:.4f}",
-                    }
-                    for i, (_, row) in enumerate(matching.iterrows())
-                ]
-
-                cd = matching.head(15).copy()
-                cd["label"] = cd["consequents_clean"].apply(
-                    lambda x: (x[:44] + "…") if len(x) > 44 else x
-                )
-                fig_lift = px.bar(
-                    cd, x="lift", y="label", orientation="h",
-                    color="confidence",
-                    color_continuous_scale=["#3b82f6", "#6366f1", "#a855f7"],
-                    title=f"Lift Scores — top recs for: {selected[:40]}",
-                    labels={"lift": "Lift Score", "label": "Product", "confidence": "Confidence"},
-                    text=cd["lift"].map("{:.2f}×".format),
-                )
-                fig_lift.update_traces(textposition="outside", marker_line_width=0)
-                fig_lift.update_layout(
-                    **_layout(
-                        height=max(300, 50 * len(cd)),
-                        yaxis=dict(**_AXIS, autorange="reversed"),
-                        coloraxis_colorbar=dict(title="Conf.", tickformat=".0%", len=0.55,
-                                                tickfont=dict(color="#94a3b8"),
-                                                title_font=dict(color="#94a3b8")),
-                    )
-                )
-                chart_lift = to_json(fig_lift)
 
     return render_template(
         "recommendations.html",
-        active_page="recommendations",
-        all_products=all_products,
-        selected=selected,
-        rec_cards=rec_cards,
-        chart_lift=chart_lift,
-        stats=stats,
-        overview=overview,
-        rec_warning=rec_warning,
+        active_page  = "recommendations",
+        all_products = all_products,
+        overview     = overview,
+        selected     = selected,
+        rec_cards    = rec_cards,
+        rec_warning  = rec_warning,
+        stats        = stats,
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# ROUTE  4 — NEXT BEST ACTION
-# ═══════════════════════════════════════════════════════════════════════════
-@app.route("/nba", methods=["GET", "POST"])
-def nba_route():
-    customer_id = None
-    customer_details = None
-    actions = []
-    error = None
+# ══════════════════════════════════════════════════════════════════════════
+# EXPECTED SALES (was: forecasting)
+# ══════════════════════════════════════════════════════════════════════════
+@app.route("/forecasting")
+@login_required
+def forecasting():
+    summary      = get_forecast_summary()
+    forecast_all = get_forecast_series()
+    return render_template(
+        "forecasting.html",
+        active_page   = "forecasting",
+        summary       = summary,
+        forecast_json = json.dumps(forecast_all),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# CUSTOMER ENTRY — Add/Select Customer + Record Purchase
+# ══════════════════════════════════════════════════════════════════════════
+@app.route("/customer-entry", methods=["GET", "POST"])
+@login_required
+def customer_entry():
+    result   = None
+    form_err = None
+    next_id  = generate_next_customer_id()
+    cust_stats = get_customer_stats()
 
     if request.method == "POST":
-        raw_id = request.form.get("customer_id", "").strip()
-        if not raw_id:
-            error = "Please enter a Customer ID."
+        try:
+            mode        = request.form.get("mode", "new")   # "new" or "existing"
+            name        = request.form.get("name", "").strip()
+            phone       = request.form.get("phone", "").strip()
+            amount_str  = request.form.get("purchase_amount", "").strip()
+            pdate       = request.form.get("purchase_date", "").strip()
+            product     = request.form.get("product_purchased", "").strip()
+
+            if not amount_str:
+                raise ValueError("Purchase amount is required.")
+            purchase_amount = float(amount_str)
+            if purchase_amount <= 0:
+                raise ValueError("Purchase amount must be greater than £0.")
+            if not pdate:
+                raise ValueError("Purchase date is required.")
+
+            # Determine Customer ID
+            if mode == "existing":
+                cid = request.form.get("existing_customer_id", "").strip()
+                if not cid:
+                    raise ValueError("Please select an existing customer.")
+                if not customer_id_exists(cid):
+                    raise ValueError(f"Customer '{cid}' not found in the system.")
+            else:
+                # New customer
+                if not name:
+                    raise ValueError("Customer name is required for new customers.")
+                cid = next_id
+                save_customer_record({
+                    "customer_id": cid,
+                    "name":  name,
+                    "phone": phone,
+                })
+
+            # Record the purchase
+            save_transaction({
+                "customer_id":       cid,
+                "purchase_amount":   purchase_amount,
+                "purchase_date":     pdate,
+                "product_purchased": product,
+            })
+
+            # Compute RFM from full transaction history
+            rfm = compute_customer_rfm(cid)
+
+            # Run ML predictions
+            seg = predict_segment(rfm["recency"], rfm["frequency"], rfm["monetary"])
+            ch  = predict_churn(
+                frequency       = rfm["frequency"],
+                monetary        = rfm["monetary"],
+                total_revenue   = rfm["total_revenue"],
+                total_quantity  = rfm["total_quantity"],
+                unique_products = rfm["unique_products"],
+            )
+
+            # Save prediction
+            save_prediction({
+                "customer_id":       cid,
+                "customer_category": seg["customer_category"],
+                "retention_risk":    ch["retention_risk"],
+                "churn_probability": ch["churn_probability"],
+            })
+
+            # Refresh stats after new customer
+            cust_stats = get_customer_stats()
+            next_id    = generate_next_customer_id()
+
+            result = {
+                "customer_id":    cid,
+                "name":           name if mode == "new" else (get_customer_by_id(cid) or {}).get("name", ""),
+                "purchase_amount":purchase_amount,
+                "purchase_date":  pdate,
+                "product":        product,
+                **rfm, **seg, **ch,
+            }
+
+        except (ValueError, TypeError) as e:
+            form_err = str(e)
+        except RuntimeError as e:
+            form_err = f"Model error: {e}"
+        except Exception as e:
+            form_err = f"Unexpected error: {e}"
+
+    recent = get_all_predictions()[:8]
+
+    return render_template(
+        "customer_entry.html",
+        active_page  = "customer_entry",
+        result       = result,
+        form_err     = form_err,
+        next_id      = next_id,
+        cust_stats   = cust_stats,
+        recent       = recent,
+        seg_loaded   = seg_loaded(),
+        churn_loaded = churn_loaded(),
+        today        = date.today().isoformat(),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# UPLOAD DATASET (batch import — keeps original IDs)
+# ══════════════════════════════════════════════════════════════════════════
+@app.route("/upload-dataset", methods=["GET", "POST"])
+@login_required
+def upload_dataset():
+    results   = []
+    form_err  = None
+    form_info = None
+
+    if request.method == "POST":
+        file = request.files.get("dataset")
+        if not file or file.filename == "":
+            form_err = "Please select a CSV file to upload."
+        elif not file.filename.endswith(".csv"):
+            form_err = "Only CSV files are accepted."
         else:
             try:
-                customer_id = int(float(raw_id))
-                row_df = DF_CUSTOMERS[DF_CUSTOMERS["CustomerID"] == customer_id]
-                
-                if row_df.empty:
-                    error = f"Customer ID {customer_id} not found."
-                else:
-                    cust = row_df.iloc[0]
-                    customer_details = {
-                        "id": customer_id,
-                        "segment": cust["Segment"],
-                        "recency": int(cust["Recency"]),
-                        "frequency": int(cust["Frequency"]),
-                        "monetary": fmt_gbp(cust["Monetary"])
-                    }
-                    actions = NBA_ENGINE.get_actions(customer_id)
-            except ValueError:
-                error = "Invalid Customer ID format."
+                df_raw = pd.read_csv(io.StringIO(file.read().decode("utf-8", errors="replace")))
+                df_raw.columns = [c.strip() for c in df_raw.columns]
+
+                required_cols = {"CustomerID", "InvoiceDate", "Quantity", "UnitPrice"}
+                missing = required_cols - set(df_raw.columns)
+                if missing:
+                    raise ValueError(
+                        f"Missing columns: {', '.join(sorted(missing))}. "
+                        "Required: CustomerID, InvoiceDate, Quantity, UnitPrice"
+                    )
+
+                rfm_df = compute_rfm_from_upload(df_raw)
+
+                for _, row in rfm_df.iterrows():
+                    try:
+                        cid = str(int(row["CustomerID"]))
+                        # Keep original CSV ID — save customer record
+                        save_customer_record({
+                            "customer_id": cid,
+                            "name":  f"Imported #{cid}",
+                            "phone": "",
+                        })
+                        # Save one aggregate transaction representing total spend
+                        save_transaction({
+                            "customer_id":       cid,
+                            "purchase_amount":   float(row["Monetary"]),
+                            "purchase_date":     date.today().isoformat(),
+                            "product_purchased": "Dataset Import",
+                        })
+                        seg = predict_segment(row["Recency"], row["Frequency"], row["Monetary"])
+                        ch  = predict_churn(
+                            frequency       = row["Frequency"],
+                            monetary        = row["Monetary"],
+                            total_revenue   = row["TotalRevenue"],
+                            total_quantity  = row["TotalQuantity"],
+                            unique_products = row["UniqueProducts"],
+                        )
+                        save_prediction({
+                            "customer_id":       cid,
+                            "customer_category": seg["customer_category"],
+                            "retention_risk":    ch["retention_risk"],
+                            "churn_probability": ch["churn_probability"],
+                        })
+                        results.append({
+                            "customer_id":    cid,
+                            "monetary":       round(row["Monetary"], 2),
+                            "frequency":      int(row["Frequency"]),
+                            "recency":        int(row["Recency"]),
+                            "customer_category": seg["customer_category"],
+                            "retention_risk":    ch["retention_risk"],
+                            "churn_pct":         ch["churn_pct"],
+                        })
+                    except Exception:
+                        continue
+
+                form_info = f"Successfully imported {len(results)} customers from '{file.filename}'."
+
+            except ValueError as e:
+                form_err = str(e)
+            except Exception as e:
+                form_err = f"Error processing file: {e}"
 
     return render_template(
-        "nba.html",
-        active_page="nba",
-        customer_id=customer_id,
-        customer=customer_details,
-        actions=actions,
-        error=error
+        "upload_dataset.html",
+        active_page  = "upload_dataset",
+        results      = results,
+        form_err     = form_err,
+        form_info    = form_info,
+        seg_loaded   = seg_loaded(),
+        churn_loaded = churn_loaded(),
     )
 
 
-@app.route("/api/forecast", methods=["POST"])
-def api_forecast():
-    """
-    Model-agnostic forecasting endpoint.
-    Returns high-quality mock data for UI testing/demonstration.
-    """
-    import datetime
-    import random
+# ══════════════════════════════════════════════════════════════════════════
+# CUSTOMER ACTIVITY LOG (was: history)
+# ══════════════════════════════════════════════════════════════════════════
+@app.route("/history")
+@login_required
+def history():
+    predictions = get_all_predictions()
+    return render_template(
+        "history.html",
+        active_page = "history",
+        predictions = predictions,
+    )
 
-    data = request.json
-    product = data.get("product", "Sample Product")
-    horizon = int(data.get("horizon", 3))
-    model_type = data.get("model", "Prophet")
 
-    # Generate 24 months of historical data
-    today = datetime.date.today()
-    hist_start = today - datetime.timedelta(days=730)
-    historical = []
-    current_val = random.randint(100, 200)
+# ══════════════════════════════════════════════════════════════════════════
+# CUSTOMER DIRECTORY
+# ══════════════════════════════════════════════════════════════════════════
+@app.route("/customers")
+@login_required
+def customers():
+    search   = request.args.get("search", "").strip()
+    category = request.args.get("category", "").strip()
+    risk     = request.args.get("risk", "").strip()
+    sort_by  = request.args.get("sort", "total_spending")
+    sort_dir = request.args.get("dir", "desc")
+    page     = max(1, int(request.args.get("page", 1)))
+
+    data = get_all_customers_with_stats(
+        search=search, category=category, risk=risk,
+        sort_by=sort_by, sort_dir=sort_dir,
+        page=page, per_page=25,
+    )
     
-    for i in range(24):
-        date = (hist_start + datetime.timedelta(days=i*30)).strftime("%Y-%m-%d")
-        # Add some seasonality and noise
-        current_val += random.randint(-20, 30)
-        current_val = max(50, current_val)
-        historical.append({"date": date, "value": current_val})
+    cust_stats = get_customer_stats()
 
-    # Generate Forecast data
-    forecast = []
-    last_val = historical[-1]["value"]
-    trend = 1.05 if random.random() > 0.4 else 0.95 # 60% chance of upward trend
-    
-    for i in range(1, horizon + 1):
-        date = (today + datetime.timedelta(days=i*30)).strftime("%Y-%m-%d")
-        last_val = int(last_val * trend + random.randint(-10, 10))
-        lower = int(last_val * 0.85)
-        upper = int(last_val * 1.15)
-        forecast.append({
-            "date": date,
-            "value": last_val,
-            "lower": lower,
-            "upper": upper
-        })
+    return render_template(
+        "customers.html",
+        active_page    = "customers",
+        data           = data,
+        cust_stats     = cust_stats,
+        search         = search,
+        sel_category   = category,
+        sel_risk       = risk,
+        sort_by        = sort_by,
+        sort_dir       = sort_dir,
+        all_categories = ALL_CATEGORIES,
+        all_risks      = ALL_RISKS,
+    )
 
-    # Summary Metrics
-    total_forecast = sum(f["value"] for f in forecast)
-    growth = ((forecast[-1]["value"] / historical[-1]["value"]) - 1) * 100
-    confidence = random.randint(82, 96)
-    peak_item = max(forecast, key=lambda x: x["value"])
 
-    # Alerts & Recommendations
-    alerts = []
-    if trend > 1.02:
-        alerts.append({
-            "type": "warning",
-            "message": f"High demand spike predicted for {product} in {peak_item['date']}. Stockout risk: HIGH."
-        })
-    if random.random() > 0.7:
-        alerts.append({
-            "type": "danger",
-            "message": f"Current inventory for {product} will not meet {horizon}-month forecasted demand."
-        })
+# ── Export CSV ─────────────────────────────────────────────────────────────
+@app.route("/customers/export")
+@login_required
+def customers_export():
+    data = get_all_customers_with_stats(per_page=10000, page=1)
+    rows = data["rows"]
+    if not rows:
+        return redirect(url_for("customers"))
 
-    recommendations = [
-        {
-            "date": (today + datetime.timedelta(days=7)).strftime("%Y-%m-%d"),
-            "action": "Restock",
-            "quantity": int(total_forecast * 0.4)
-        },
-        {
-            "date": (today + datetime.timedelta(days=45)).strftime("%Y-%m-%d"),
-            "action": "Buffer Increase",
-            "quantity": int(total_forecast * 0.15)
-        }
+    lines = ["Customer ID,Name,Customer Category,Retention Risk,Total Spending,Orders,CLV,Avg Order,Last Purchase"]
+    for r in rows:
+        lines.append(
+            f"{r['customer_id']},{r.get('name','')},{r.get('customer_category','')},{r.get('retention_risk','')},"
+            f"{r.get('total_spending',0):.2f},{r.get('order_count',0)},"
+            f"{r.get('clv',0):.2f},{r.get('avg_order_value',0):.2f},{r.get('last_purchase','')}"
+        )
+    csv_content = "\n".join(lines)
+    return Response(
+        csv_content,
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment;filename=customers.csv"},
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TOP CUSTOMERS
+# ══════════════════════════════════════════════════════════════════════════
+@app.route("/customers/top")
+@login_required
+def customers_top():
+    sort_by = request.args.get("sort", "total_spending")
+    rows    = get_top_customers(n=25, sort_by=sort_by)
+    return render_template(
+        "customers_top.html",
+        active_page = "customers_top",
+        rows        = rows,
+        sort_by     = sort_by,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# CUSTOMER PROFILE (mini-CRM)
+# ══════════════════════════════════════════════════════════════════════════
+@app.route("/customer/<customer_id>")
+@login_required
+def customer_detail(customer_id):
+    customer = get_customer_by_id(customer_id)
+    if not customer:
+        return render_template("404.html"), 404
+
+    transactions = get_customer_transactions(customer_id)
+    predictions  = get_customer_predictions(customer_id)
+    latest_pred  = predictions[0] if predictions else None
+    rfm          = compute_customer_rfm(customer_id)
+
+    # Recommendations based on last purchased product
+    rec_product = None
+    rec_cards   = []
+    if transactions:
+        last_product = transactions[0].get("product_purchased", "")
+        if last_product and last_product not in ("Dataset Import", ""):
+            rec_product = last_product
+            rec_cards   = get_recommendations(DF_RULES, last_product)[:6]
+
+    # Spending trend for chart (last 12 transactions)
+    spend_trend = [
+        {"date": t["purchase_date"], "amount": t["purchase_amount"]}
+        for t in reversed(transactions[-12:])
     ]
 
-    return {
-        "status": "success",
-        "data": {
-            "historical": historical,
-            "forecast": forecast,
-            "summary": {
-                "total": f"{total_forecast:,}",
-                "growth": f"{growth:+.1f}%",
-                "confidence": f"{confidence}%",
-                "peak_date": peak_item["date"],
-                "peak_value": f"{peak_item['value']:,}",
-                "risk": "High" if trend > 1.02 else "Normal"
-            },
-            "alerts": alerts,
-            "recommendations": recommendations
-        }
-    }
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ROUTE  6 — ANALYTICS
-# ═══════════════════════════════════════════════════════════════════════════
-@app.route("/analytics")
-def analytics():
-    df = DF_CUSTOMERS
-    if df.empty:
-        return render_template("analytics.html", active_page="analytics", error=True)
-
-    # 1. Segment pie
-    seg_counts = df["Segment"].value_counts().reset_index()
-    seg_counts.columns = ["Segment", "Count"]
-    fig_pie = px.pie(
-        seg_counts, values="Count", names="Segment",
-        color="Segment", color_discrete_map=SEGMENT_COLORS,
-        title="👥 How Your Customers Are Grouped", hole=0.48,
-    )
-    fig_pie.update_traces(
-        textinfo="label+percent+value",
-        textfont=dict(size=13, color="#f8fafc"),
-        hovertemplate="<b>%{label}</b><br>%{value:,} customers (%{percent})<extra></extra>",
-        pull=[0.04 if s == "At Risk" else 0 for s in seg_counts["Segment"]],
-    )
-    fig_pie.update_layout(**_layout_no_xy(height=420))
-
-    # 2. Top 10 customers
-    top10 = df.nlargest(10, "Monetary")[["CustomerID", "Monetary", "Segment"]].copy()
-    top10["CustomerID"] = "Customer " + top10["CustomerID"].astype(str)
-    top10 = top10.sort_values("Monetary", ascending=True)
-    fig_top = px.bar(
-        top10, x="Monetary", y="CustomerID", orientation="h",
-        color="Segment", color_discrete_map=SEGMENT_COLORS,
-        title="🏆 Your Top 10 Highest-Spending Customers",
-        labels={"Monetary": "Total Spend (£)", "CustomerID": "Customer"},
-        text=top10["Monetary"].map("£{:,.0f}".format),
-    )
-    fig_top.update_traces(textposition="outside", marker_line_width=0,
-                          textfont=dict(color="#f1f5f9", size=12))
-    fig_top.update_layout(**_layout(height=420, xaxis_title="Total Spend (£)", yaxis_title="Customer"))
-
-    # 3. Recency histogram
-    fig_rec = px.histogram(
-        df, x="Recency", color="Segment", color_discrete_map=SEGMENT_COLORS,
-        nbins=40,
-        title="📅 How Recently Customers Shopped (Days Since Last Purchase)",
-        labels={"Recency": "Days Since Last Purchase", "count": "Number of Customers",
-                "Segment": "Customer Group"},
-        barmode="overlay", opacity=0.82,
-    )
-    fig_rec.update_layout(**_layout(
-        height=380, bargap=0.03,
-        xaxis_title="Days Since Last Purchase",
-        yaxis_title="Number of Customers",
-    ))
-
-    # 4. Frequency histogram
-    freq_cap = df["Frequency"].quantile(0.99)
-    fig_frq = px.histogram(
-        df[df["Frequency"] <= freq_cap],
-        x="Frequency", color="Segment", color_discrete_map=SEGMENT_COLORS,
-        nbins=35,
-        title="🔁 How Often Customers Purchase (Visits per Customer)",
-        labels={"Frequency": "Number of Purchases", "count": "Number of Customers",
-                "Segment": "Customer Group"},
-        barmode="overlay", opacity=0.82,
-    )
-    fig_frq.update_layout(**_layout(
-        height=380, bargap=0.03,
-        xaxis_title="Number of Purchases",
-        yaxis_title="Number of Customers",
-    ))
-
-    # 5. Monetary box
-    mon_cap = df["Monetary"].quantile(0.97)
-    fig_box = px.box(
-        df[df["Monetary"] <= mon_cap],
-        x="Segment", y="Monetary",
-        color="Segment", color_discrete_map=SEGMENT_COLORS,
-        title="💷 Typical Spend Range by Customer Group",
-        labels={"Monetary": "Total Spend (£)", "Segment": "Customer Group"},
-        points="outliers",
-    )
-    fig_box.update_traces(marker_size=4, line_width=1.8)
-    fig_box.update_layout(**_layout(
-        height=420, showlegend=False,
-        xaxis_title="Customer Group",
-        yaxis_title="Total Spend (£)",
-    ))
-
-    # 6. Scatter
-    df_samp = df.sample(min(1800, len(df)), random_state=42)
-    fig_scat = px.scatter(
-        df_samp, x="Recency", y="Monetary",
-        color="Segment", color_discrete_map=SEGMENT_COLORS,
-        size="Frequency", size_max=20, opacity=0.72,
-        title="🔍 Recency vs. Total Spend — Bubble Size = How Often They Buy",
-        labels={
-            "Recency": "Days Since Last Purchase",
-            "Monetary": "Total Spend (£)",
-            "Frequency": "Times Purchased",
-            "Segment": "Customer Group",
-        },
-    )
-    fig_scat.update_layout(**_layout(
-        height=480,
-        xaxis_title="Days Since Last Purchase",
-        yaxis_title="Total Spend (£)",
-    ))
-
-    # 7. Treemap
-    top20 = df.nlargest(20, "Monetary").copy()
-    top20["CID"] = "Customer " + top20["CustomerID"].astype(str)
-    fig_tree = px.treemap(
-        top20, path=["Segment", "CID"], values="Monetary",
-        color="Monetary",
-        color_continuous_scale=["#1e1b4b", "#6366f1", "#a855f7"],
-        title="🗺️ Top 20 Customers — Who Contributes the Most Revenue",
-        labels={"Monetary": "Total Spend (£)"},
-    )
-    fig_tree.update_traces(
-        hovertemplate="<b>%{label}</b><br>Total Spend: £%{value:,.0f}<extra></extra>"
-    )
-    fig_tree.update_layout(
-        height=460,
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="Inter", color="#f8fafc", size=13),
-        margin=dict(l=20, r=20, t=65, b=20),
-        title_font=dict(color="#e2e8f0", size=15),
-        coloraxis_colorbar=dict(
-            title="Spend (£)",
-            tickfont=dict(color="#cbd5e1", size=11),
-            title_font=dict(color="#cbd5e1"),
-        ),
+    return render_template(
+        "customer_detail.html",
+        active_page  = "customers",
+        customer     = customer,
+        transactions = transactions,
+        predictions  = predictions,
+        latest_pred  = latest_pred,
+        rfm          = rfm,
+        rec_product  = rec_product,
+        rec_cards    = rec_cards,
+        spend_trend  = json.dumps(spend_trend),
     )
 
-    # 8. Freq bucket bar
-    df_bkt = df.copy()
-    df_bkt["Purchases Made"] = pd.cut(
-        df_bkt["Frequency"],
-        bins=[0, 2, 5, 10, 20, df_bkt["Frequency"].max() + 1],
-        labels=["1–2 times", "3–5 times", "6–10 times", "11–20 times", "20+ times"],
-    )
-    avg_mon = (
-        df_bkt.groupby("Purchases Made", observed=True)["Monetary"]
-        .mean().reset_index()
-    )
-    avg_mon.columns = ["Purchases Made", "Avg Total Spend (£)"]
-    fig_bkt = px.bar(
-        avg_mon, x="Purchases Made", y="Avg Total Spend (£)",
-        color="Avg Total Spend (£)",
-        color_continuous_scale=["#3b82f6", "#6366f1", "#a855f7"],
-        title="📈 Do Loyal Customers Spend More? Average Spend by Visit Frequency",
-        text=avg_mon["Avg Total Spend (£)"].map("£{:,.0f}".format),
-    )
-    fig_bkt.update_traces(textposition="outside", marker_line_width=0, width=0.52,
-                          textfont=dict(color="#f1f5f9", size=12))
-    fig_bkt.update_layout(**_layout(
-        height=400, showlegend=False, coloraxis_showscale=False,
-        xaxis_title="How Many Times They've Purchased",
-        yaxis_title="Average Total Spend (£)",
-    ))
+
+# ══════════════════════════════════════════════════════════════════════════
+# CUSTOMER SEARCH
+# ══════════════════════════════════════════════════════════════════════════
+@app.route("/customer-search", methods=["GET", "POST"])
+@login_required
+def customer_search():
+    query    = request.args.get("q", "").strip() or request.form.get("q", "").strip()
+    category = request.args.get("category", "").strip()
+    risk     = request.args.get("risk", "").strip()
+    results  = []
+
+    if query or category or risk:
+        data = get_all_customers_with_stats(
+            search=query, category=category, risk=risk,
+            sort_by="customer_id", sort_dir="asc",
+            page=1, per_page=50,
+        )
+        results = data["rows"]
 
     return render_template(
-        "analytics.html",
-        active_page="analytics",
-        chart_pie=to_json(fig_pie),
-        chart_top=to_json(fig_top),
-        chart_rec=to_json(fig_rec),
-        chart_frq=to_json(fig_frq),
-        chart_box=to_json(fig_box),
-        chart_scat=to_json(fig_scat),
-        chart_tree=to_json(fig_tree),
-        chart_bkt=to_json(fig_bkt),
+        "customer_search.html",
+        active_page    = "customer_search",
+        query          = query,
+        sel_category   = category,
+        sel_risk       = risk,
+        results        = results,
+        all_categories = ALL_CATEGORIES,
+        all_risks      = ALL_RISKS,
     )
 
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    return render_template("login.html")
+# ══════════════════════════════════════════════════════════════════════════
+# API ROUTES
+# ══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/next-customer-id")
+@login_required
+def api_next_customer_id():
+    return jsonify({"next_id": generate_next_customer_id()})
+
+
+@app.route("/api/search-customers")
+@login_required
+def api_search_customers():
+    q       = request.args.get("q", "").strip()
+    results = search_customers_autocomplete(q) if q else []
+    return jsonify(results)
+
+
+@app.route("/api/predict", methods=["POST"])
+@login_required
+def api_predict():
+    try:
+        body = request.get_json(force=True) or {}
+        cid  = str(body.get("customer_id", ""))
+
+        rfm_data = compute_customer_rfm(cid) if customer_id_exists(cid) else {
+            "recency":        float(body.get("recency", 30)),
+            "frequency":      float(body.get("frequency", 1)),
+            "monetary":       float(body.get("monetary", 0)),
+            "total_revenue":  float(body.get("monetary", 0)),
+            "total_quantity": float(body.get("frequency", 1)),
+            "unique_products":1.0,
+        }
+
+        seg = predict_segment(rfm_data["recency"], rfm_data["frequency"], rfm_data["monetary"])
+        ch  = predict_churn(
+            rfm_data["frequency"], rfm_data["monetary"],
+            rfm_data["total_revenue"], rfm_data["total_quantity"], rfm_data["unique_products"],
+        )
+
+        if cid:
+            save_prediction({
+                "customer_id":       cid,
+                "customer_category": seg["customer_category"],
+                "retention_risk":    ch["retention_risk"],
+                "churn_probability": ch["churn_probability"],
+            })
+
+        return jsonify({
+            "status":           "success",
+            "customer_id":      cid,
+            "customer_category":seg["customer_category"],
+            "retention_risk":   ch["retention_risk"],
+            "churn_probability":ch["churn_probability"],
+            "churn_pct":        ch["churn_pct"],
+        })
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@app.route("/api/forecast")
+@login_required
+def api_forecast():
+    days_param = request.args.get("days", "all")
+    days   = None if days_param == "all" else int(days_param)
+    series = get_forecast_series(days=days)
+    summ   = get_forecast_summary(days=days)
+    return jsonify({"status": "success", "data": series, "summary": summ})
+
+
+@app.route("/api/dashboard-stats")
+@login_required
+def api_dashboard_stats():
+    summary = load_dashboard_summary()
+    df = DF_SEGMENTS
+    seg_dist = {}
+    if not df.empty:
+        for seg, friendly in SEGMENT_LABEL_MAP.items():
+            seg_dist[friendly] = int((df["Segment"] == seg).sum())
+    return jsonify({"status": "success", "kpis": summary, "seg_distribution": seg_dist})
+
+
+# ── 404 handler ────────────────────────────────────────────────────────────
+@app.errorhandler(404)
+def page_not_found(_):
+    return render_template("404.html"), 404
 
 
 if __name__ == "__main__":

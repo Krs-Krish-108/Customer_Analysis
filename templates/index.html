@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>RetailIQ — AI-Powered Retail Customer Analytics</title>
+  <meta name="description" content="Professional retail customer analytics platform with ML-powered segmentation, churn prediction, product recommendations, and demand forecasting."/>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet"/>
+  <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet"/>
+  <style>
+    body { overflow-x: hidden; }
+    .nav-top {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+      padding: 16px 40px;
+      display: flex; align-items: center; justify-content: space-between;
+      background: rgba(5,8,17,0.8);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .nav-brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; color: #fff; text-decoration: none; }
+    .nav-brand .ico { width: 34px; height: 34px; background: var(--gradient-main); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-glass);
+      border-radius: var(--radius-card);
+      padding: 28px;
+      transition: all 0.25s ease;
+    }
+    .feature-card:hover {
+      border-color: rgba(139,92,246,0.35);
+      transform: translateY(-4px);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    }
+    .feature-icon {
+      width: 52px; height: 52px;
+      border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+      margin-bottom: 16px;
+    }
+    .feature-name { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px; }
+    .feature-desc { font-size: 13.5px; color: var(--text-secondary); line-height: 1.65; }
+  </style>
+</head>
+<body>
+
+<nav class="nav-top">
+  <a href="{{ url_for('index') }}" class="nav-brand">
+    <div class="ico"><i class="fa-solid fa-chart-line"></i></div>
+    RetailIQ
+  </a>
+  <div class="d-flex gap-2">
+    {% if session.get('user_id') %}
+    <a href="{{ url_for('dashboard') }}" class="btn btn-primary btn-sm">
+      <i class="fa-solid fa-gauge-high"></i> Dashboard
+    </a>
+    <a href="{{ url_for('logout') }}" class="btn btn-outline-danger btn-sm" style="border-color: rgba(239, 68, 68, 0.3); color: #ef4444; background: rgba(239, 68, 68, 0.05);">
+      Log Out
+    </a>
+    {% else %}
+    <a href="{{ url_for('login') }}" class="btn btn-primary btn-sm">
+      <i class="fa-solid fa-user"></i> Login
+    </a>
+    <a href="{{ url_for('register') }}" class="btn btn-outline btn-sm">Register</a>
+    {% endif %}
+  </div>
+</nav>
+
+<section class="hero-section" style="padding-top: 100px;">
+  <div class="hero-eyebrow"><i class="fa-solid fa-sparkles me-1"></i> UCI Online Retail Dataset · ML-Powered</div>
+  <h1 class="hero-title">
+    Retail Intelligence<br/>
+    <span>Powered by Machine Learning</span>
+  </h1>
+  <p class="hero-subtitle">
+    End-to-end customer analytics platform featuring segmentation, churn prediction,
+    product recommendations, and demand forecasting — all in a unified dark-mode dashboard.
+  </p>
+
+  <div class="d-flex gap-3 justify-content-center flex-wrap">
+    {% if session.get('user_id') %}
+    <a href="{{ url_for('dashboard') }}" class="btn btn-primary" style="padding: 13px 28px; font-size: 15px;">
+      <i class="fa-solid fa-gauge-high"></i> Launch Dashboard
+    </a>
+    {% else %}
+    <a href="{{ url_for('login') }}" class="btn btn-primary" style="padding: 13px 28px; font-size: 15px;">
+      <i class="fa-solid fa-user"></i> Login to Dashboard
+    </a>
+    {% endif %}
+    <a href="{{ url_for('customer_entry') }}" class="btn btn-outline" style="padding: 13px 28px; font-size: 15px;">
+      <i class="fa-solid fa-flask"></i> Try Live Prediction
+    </a>
+  </div>
+
+  <div class="hero-features">
+    <div class="feature-chip"><i class="fa-solid fa-brain"></i> KMeans Segmentation</div>
+    <div class="feature-chip"><i class="fa-solid fa-tree"></i> Random Forest Churn</div>
+    <div class="feature-chip"><i class="fa-solid fa-network-wired"></i> Apriori Recommendations</div>
+    <div class="feature-chip"><i class="fa-solid fa-chart-area"></i> Prophet Forecasting</div>
+  </div>
+
+  <div class="hero-stats">
+    <div>
+      <div class="hero-stat-num">{{ "{:,}".format(summary.total_customers) }}</div>
+      <div class="hero-stat-label">Customers Analysed</div>
+    </div>
+    <div>
+      <div class="hero-stat-num">£{{ "{:,.0f}".format(summary.total_revenue) }}</div>
+      <div class="hero-stat-label">Total Revenue</div>
+    </div>
+    <div>
+      <div class="hero-stat-num">{{ "{:,}".format(summary.total_orders) }}</div>
+      <div class="hero-stat-label">Total Orders</div>
+    </div>
+    <div>
+      <div class="hero-stat-num">{{ summary.total_products }}</div>
+      <div class="hero-stat-label">Unique Products</div>
+    </div>
+  </div>
+</section>
+
+<!-- Features Grid -->
+<section style="padding: 80px 40px; background: var(--bg-secondary);">
+  <div class="container" style="max-width:1200px; margin:0 auto;">
+    <div class="text-center mb-5">
+      <div class="hero-eyebrow" style="margin-bottom:12px;">Platform Modules</div>
+      <h2 style="font-size: 32px; font-weight: 800; color: var(--text-primary);">Four Integrated ML Engines</h2>
+    </div>
+    <div class="grid-4">
+      <div class="feature-card">
+        <div class="feature-icon kpi-icon blue"><i class="fa-solid fa-users-viewfinder"></i></div>
+        <div class="feature-name">Customer Segmentation</div>
+        <div class="feature-desc">KMeans clustering with RFM features categorises customers into VIP, Loyal, Regular, and At Risk segments.</div>
+        <a href="{{ url_for('segmentation') }}" class="btn btn-outline btn-sm mt-4">Explore <i class="fa-solid fa-arrow-right"></i></a>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon kpi-icon rose"><i class="fa-solid fa-triangle-exclamation"></i></div>
+        <div class="feature-name">Churn Prediction</div>
+        <div class="feature-desc">Random Forest model predicts churn probability using frequency, monetary, and product diversity features.</div>
+        <a href="{{ url_for('churn') }}" class="btn btn-outline btn-sm mt-4">Explore <i class="fa-solid fa-arrow-right"></i></a>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon kpi-icon purple"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
+        <div class="feature-name">Recommendations</div>
+        <div class="feature-desc">Apriori association rules surface personalised product recommendations with confidence and lift scores.</div>
+        <a href="{{ url_for('recommendations') }}" class="btn btn-outline btn-sm mt-4">Explore <i class="fa-solid fa-arrow-right"></i></a>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon kpi-icon cyan"><i class="fa-solid fa-chart-area"></i></div>
+        <div class="feature-name">Demand Forecasting</div>
+        <div class="feature-desc">Prophet time-series model generates daily revenue forecasts with upper and lower confidence intervals.</div>
+        <a href="{{ url_for('forecasting') }}" class="btn btn-outline btn-sm mt-4">Explore <i class="fa-solid fa-arrow-right"></i></a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

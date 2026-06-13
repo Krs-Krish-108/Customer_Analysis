@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}Customer Retention{% endblock %}
+{% block page_title %}<i class="fa-solid fa-triangle-exclamation me-2" style="color:#ef4444"></i>Customer Retention{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Customer Retention</h1>
+  <p>Identifying customers at risk of leaving and what to do about it.</p>
+</div>
+
+{% if error %}
+<div class="info-box error"><i class="fa-solid fa-circle-exclamation"></i> No retention data available.</div>
+{% else %}
+
+<!-- KPIs with Actions -->
+<div class="kpi-grid mb-2">
+  <div class="kpi-card">
+    <div class="kpi-icon rose"><i class="fa-solid fa-users-slash"></i></div>
+    <div class="kpi-value" style="color:#ef4444">{{ churned }}</div>
+    <div class="kpi-label">Customers You May Lose</div>
+    <div class="insight-actions mt-3">
+      {% for a in risk_actions[:2] %}<div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> {{ a }}</div>{% endfor %}
+    </div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-icon green"><i class="fa-solid fa-users-check"></i></div>
+    <div class="kpi-value" style="color:#10b981">{{ retained }}</div>
+    <div class="kpi-label">Loyal Customers</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-icon amber"><i class="fa-solid fa-percent"></i></div>
+    <div class="kpi-value" style="color:{{ '#ef4444' if churn_rate>30 else '#f59e0b' if churn_rate>15 else '#10b981' }}">{{ churn_rate }}%</div>
+    <div class="kpi-label">At-Risk Rate</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-icon purple"><i class="fa-solid fa-users"></i></div>
+    <div class="kpi-value">{{ total }}</div>
+    <div class="kpi-label">Total Analysed</div>
+  </div>
+</div>
+
+<!-- Charts -->
+<div class="grid-2 mb-6">
+  <div class="glass-card">
+    <div class="card-title"><i class="fa-solid fa-chart-pie"></i> Customers You May Lose vs Loyal</div>
+    <div class="chart-container" style="height:280px"><canvas id="churnDonut"></canvas></div>
+    <div class="mt-3 info-box warn" style="font-size:13px">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      <div>
+        <strong>{{ churned }} customers</strong> need attention.
+        <a href="{{ url_for('customers') }}?risk=High+Retention+Risk" style="color:#fcd34d;margin-left:4px">View High Risk Customers →</a>
+      </div>
+    </div>
+  </div>
+  <div class="glass-card">
+    <div class="card-title"><i class="fa-solid fa-chart-bar"></i> At-Risk Rate by Customer Category</div>
+    <div class="chart-container" style="height:280px"><canvas id="churnBySegChart"></canvas></div>
+  </div>
+</div>
+
+<!-- High-Risk Table -->
+{% if at_risk_table %}
+<div class="glass-card mb-6">
+  <div class="flex-between mb-4">
+    <div class="card-title" style="margin-bottom:0"><i class="fa-solid fa-fire"></i> Customers Needing Immediate Attention (Risk ≥ 70%)</div>
+    <a href="{{ url_for('customers') }}?risk=High+Retention+Risk" class="btn btn-outline btn-sm">View All High Risk</a>
+  </div>
+  <div class="table-wrapper">
+    <table class="analytics-table">
+      <thead><tr><th>Customer ID</th><th>Category</th><th>Days Since Purchase</th><th>Order Count</th><th>Spending</th><th>Risk Level</th></tr></thead>
+      <tbody>
+        {% for row in at_risk_table %}
+        <tr>
+          <td><a href="{{ url_for('customer_detail', customer_id=row.CustomerID|string) }}" style="color:#8b5cf6;font-weight:600">{{ row.CustomerID }}</a></td>
+          <td><span class="seg-badge badge-{{ 'vip' if 'Best' in row.category else 'loyal' if 'Repeat' in row.category else 'regular' if 'Standard' in row.category else 'risk' }}" style="font-size:11px">{{ row.category }}</span></td>
+          <td>{{ row.Recency }}d</td>
+          <td>{{ row.Frequency }}</td>
+          <td>£{{ "{:,.2f}".format(row.Monetary) }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div class="progress-track" style="width:80px"><div class="progress-fill red" style="width:{{ (row.ChurnRisk*100)|int }}%"></div></div>
+              <span style="color:#ef4444;font-weight:600;font-size:13px">{{ (row.ChurnRisk*100)|int }}%</span>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Action Guide -->
+<div class="glass-card">
+  <div class="card-title"><i class="fa-solid fa-bolt-lightning"></i> Retention Action Playbook</div>
+  <div class="grid-3">
+    <div>
+      <div class="seg-badge badge-risk mb-2" style="font-size:12px">High Retention Risk</div>
+      {% for a in risk_actions %}
+      <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> {{ a }}</div>
+      {% endfor %}
+    </div>
+    <div>
+      <div class="seg-badge badge-warn mb-2" style="font-size:12px">Medium Retention Risk</div>
+      <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> Send personalised check-in</div>
+      <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> Offer product recommendation</div>
+      <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> Invite to upcoming sale</div>
+    </div>
+    <div>
+      <div class="seg-badge badge-safe mb-2" style="font-size:12px">Low Retention Risk</div>
+      <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> Continue regular engagement</div>
+      <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> Reward with occasional offers</div>
+      <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> Ask for product feedback</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const SEG_COLORS = {'Best Customers':'#10b981','Repeat Customers':'#3b82f6','Standard Customers':'#64748b','Customers You May Lose':'#ef4444'};
+const churnSeg = {{ churn_seg_json | safe }};
+
+new Chart(document.getElementById('churnDonut'),{
+  type:'doughnut',
+  data:{
+    labels:['Customers You May Lose','Loyal Customers'],
+    datasets:[{data:[{{ churned }},{{ retained }}],backgroundColor:['#ef4444','#10b981'],borderWidth:0,hoverOffset:6}]
+  },
+  options:{
+    cutout:'65%',maintainAspectRatio:false,
+    plugins:{legend:{position:'bottom',labels:{color:'#94a3b8',font:{size:12},boxWidth:12}},
+      tooltip:{callbacks:{label:ctx=>` ${ctx.label}: ${ctx.raw.toLocaleString()}`}}
+    },
+    onClick:(evt,els)=>{
+      if(els.length){const risk=els[0].index===0?'High+Retention+Risk':'Low+Retention+Risk';window.location.href=`/customers?risk=${risk}`;}
+    }
+  }
+});
+
+if(churnSeg.length){
+  new Chart(document.getElementById('churnBySegChart'),{
+    type:'bar',
+    data:{
+      labels:churnSeg.map(s=>s.category),
+      datasets:[{
+        label:'At-Risk Rate (%)',
+        data:churnSeg.map(s=>s.ChurnRate),
+        backgroundColor:churnSeg.map(s=>(SEG_COLORS[s.category]||'#64748b')+'99'),
+        borderColor:churnSeg.map(s=>SEG_COLORS[s.category]||'#64748b'),
+        borderWidth:1,borderRadius:8,borderSkipped:false,
+      }]
+    },
+    options:{
+      maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>` ${ctx.raw}% at risk`}}},
+      scales:{
+        x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b',font:{size:11}}},
+        y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b',callback:v=>v+'%'},max:100}
+      },
+      onClick:(evt,els)=>{ if(els.length){const cat=churnSeg[els[0].index].category;window.location.href=`/customers?category=${encodeURIComponent(cat)}`;} }
+    }
+  });
+}
+</script>
+{% endblock %}

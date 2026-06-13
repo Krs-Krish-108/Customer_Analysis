@@ -1,21 +1,29 @@
-# Environment
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
 .venv/
 venv/
 env/
-.env
-.agent
-# Python caches
-__pycache__/
-*.py[cod]
-*$py.class
+*.egg-info/
+dist/
+build/
 
-# Data and Models
-# Comment these out if you intend to track the CSVs and the model file in Git
-# *.csv
-# *.pkl
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
-database.db 
-customer_segments copy.csv    
+
+# Project
+*.log
+database/retail.db
+data/dashboard_summary.json
+
+# Keep model artifacts
+!models/*.pkl
+!data/*.csv

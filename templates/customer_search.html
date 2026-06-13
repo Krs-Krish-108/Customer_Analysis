@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Search Customers{% endblock %}
+{% block page_title %}<i class="fa-solid fa-magnifying-glass me-2" style="color:#06b6d4"></i>Search Customers{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Customer Search</h1>
+  <p>Find customers by ID, name, phone, category, or retention risk.</p>
+</div>
+
+<!-- Search Form -->
+<div class="glass-card mb-6">
+  <form method="GET" action="{{ url_for('customer_search') }}" class="row g-3 align-items-end">
+    <div class="col-md-4">
+      <label class="form-label"><i class="fa-solid fa-magnifying-glass me-1"></i> Search Customer</label>
+      <input type="text" name="q" id="searchQ" class="form-control"
+             placeholder="Customer ID, name, or phone…"
+             value="{{ query }}" autofocus autocomplete="off">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Customer Category</label>
+      <select name="category" class="form-control">
+        <option value="">All Categories</option>
+        {% for c in all_categories %}
+        <option value="{{ c }}" {{ 'selected' if sel_category == c }}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Retention Risk</label>
+      <select name="risk" class="form-control">
+        <option value="">All Risk Levels</option>
+        {% for r in all_risks %}
+        <option value="{{ r }}" {{ 'selected' if sel_risk == r }}>{{ r }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <button type="submit" class="btn btn-primary w-100">
+        <i class="fa-solid fa-search"></i> Search
+      </button>
+    </div>
+  </form>
+</div>
+
+<!-- Results -->
+{% if results %}
+<div class="flex-between mb-3">
+  <div class="text-muted text-sm">Found <strong style="color:var(--text-primary)">{{ results|length }}</strong> customer(s)</div>
+</div>
+<div class="glass-card">
+  <div class="table-wrapper">
+    <table class="analytics-table">
+      <thead>
+        <tr><th>Customer ID</th><th>Name</th><th>Phone</th><th>Category</th><th>Retention Risk</th><th>Total Spending</th><th>Orders</th><th>Lifetime Value</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+        <tr>
+          <td style="font-weight:700;color:#8b5cf6">{{ r.customer_id }}</td>
+          <td>{{ r.name or '—' }}</td>
+          <td class="text-muted">{{ r.phone or '—' }}</td>
+          <td>
+            {% if r.customer_category %}
+            <span class="seg-badge badge-{{ 'vip' if 'Best' in r.customer_category else 'loyal' if 'Repeat' in r.customer_category else 'regular' if 'Standard' in r.customer_category else 'risk' if 'Lose' in r.customer_category else 'regular' }}">
+              {{ r.customer_category }}
+            </span>{% else %}—{% endif %}
+          </td>
+          <td>
+            {% if r.retention_risk %}
+            <span class="seg-badge badge-{{ 'risk' if 'High' in r.retention_risk else 'warn' if 'Medium' in r.retention_risk else 'safe' }}">
+              {{ r.retention_risk }}
+            </span>{% else %}—{% endif %}
+          </td>
+          <td>£{{ "{:,.2f}".format(r.total_spending or 0) }}</td>
+          <td>{{ r.order_count or 0 }}</td>
+          <td style="color:#8b5cf6;font-weight:600">£{{ "{:,.2f}".format(r.clv or 0) }}</td>
+          <td>
+            <a href="{{ url_for('customer_detail', customer_id=r.customer_id) }}" class="btn btn-primary btn-sm">
+              <i class="fa-solid fa-eye"></i> View
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% elif query or sel_category or sel_risk %}
+<div class="glass-card empty-state">
+  <i class="fa-solid fa-user-slash"></i>
+  <p>No customers found matching your search.</p>
+  <a href="{{ url_for('customer_entry') }}" class="btn btn-primary btn-sm mt-2">
+    <i class="fa-solid fa-user-plus"></i> Add New Customer
+  </a>
+</div>
+
+{% else %}
+<div class="glass-card empty-state" style="padding:60px">
+  <i class="fa-solid fa-magnifying-glass" style="font-size:40px;opacity:0.3;margin-bottom:16px;display:block"></i>
+  <p style="font-size:15px;color:var(--text-secondary)">Enter a customer ID, name, or phone number above to search.</p>
+  <div class="d-flex gap-3 justify-content-center mt-4">
+    <a href="{{ url_for('customers') }}" class="btn btn-outline btn-sm"><i class="fa-solid fa-address-book"></i> Browse All Customers</a>
+    <a href="{{ url_for('customers_top') }}" class="btn btn-outline btn-sm"><i class="fa-solid fa-trophy"></i> Top Customers</a>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

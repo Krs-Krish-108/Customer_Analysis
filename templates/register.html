@@ -1,0 +1,34 @@
+{% extends "auth.html" %}
+
+{% block title %}Create Account{% endblock %}
+
+{% block content %}
+<div class="glass-card">
+  <h4 class="mb-4 text-center">Create Account</h4>
+  
+  {% if error %}
+  <div class="alert alert-danger" style="background:rgba(239, 68, 68, 0.1); border-color:rgba(239, 68, 68, 0.3); color:#fca5a5;">
+    {{ error }}
+  </div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('register') }}">
+    <div class="mb-3">
+      <label for="username" class="form-label" style="font-size:14px; color:var(--text-muted)">Username</label>
+      <input type="text" class="form-control" id="username" name="username" required autofocus>
+    </div>
+    
+    <div class="mb-4">
+      <label for="password" class="form-label" style="font-size:14px; color:var(--text-muted)">Password</label>
+      <input type="password" class="form-control" id="password" name="password" required>
+      <div class="form-text mt-2" style="color:var(--text-muted); font-size:12px;">Choose a strong password to secure your CRM data.</div>
+    </div>
+    
+    <button type="submit" class="btn btn-primary w-100 mb-3" style="border-radius:8px;">Register Account</button>
+  </form>
+  
+  <div class="text-center">
+    <a href="{{ url_for('login') }}" class="auth-link">Already have an account? Sign in</a>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}{{ customer.customer_id }} — Customer Profile{% endblock %}
+{% block page_title %}<i class="fa-solid fa-user me-2" style="color:#10b981"></i>Customer Profile{% endblock %}
+
+{% block content %}
+
+<!-- Profile Header -->
+<div class="glass-card mb-6" style="background:var(--gradient-card);border-color:rgba(139,92,246,0.25)">
+  <div class="flex-between flex-wrap gap-4">
+    <div class="d-flex align-items-center gap-4">
+      <div style="width:60px;height:60px;border-radius:16px;background:var(--gradient-main);display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;color:#fff;flex-shrink:0">
+        {{ (customer.name or customer.customer_id)[0] | upper }}
+      </div>
+      <div>
+        <div style="font-size:22px;font-weight:800;color:var(--text-primary)">{{ customer.name or customer.customer_id }}</div>
+        <div style="font-size:13px;color:var(--text-muted);margin-top:2px">{{ customer.customer_id }}{% if customer.phone %} · {{ customer.phone }}{% endif %}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Customer since {{ customer.created_at[:10] }}</div>
+      </div>
+    </div>
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+      {% if latest_pred %}
+      <span class="seg-badge badge-{{ 'vip' if 'Best' in (latest_pred.customer_category or '') else 'loyal' if 'Repeat' in (latest_pred.customer_category or '') else 'regular' if 'Standard' in (latest_pred.customer_category or '') else 'risk' if 'Lose' in (latest_pred.customer_category or '') else 'regular' }}"
+            style="font-size:13px;padding:6px 14px">
+        {{ latest_pred.customer_category or '—' }}
+      </span>
+      <span class="seg-badge badge-{{ 'risk' if 'High' in (latest_pred.retention_risk or '') else 'warn' if 'Medium' in (latest_pred.retention_risk or '') else 'safe' }}"
+            style="font-size:13px;padding:6px 14px">
+        {{ latest_pred.retention_risk or '—' }}
+      </span>
+      {% endif %}
+      <a href="{{ url_for('customer_entry') }}" class="btn btn-primary btn-sm">
+        <i class="fa-solid fa-bag-shopping"></i> Record Purchase
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- KPI row -->
+<div class="kpi-grid mb-6">
+  <div class="kpi-card">
+    <div class="kpi-icon green"><i class="fa-solid fa-sterling-sign"></i></div>
+    <div class="kpi-value">£{{ "{:,.2f}".format(rfm.monetary) }}</div>
+    <div class="kpi-label">Total Spending</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-icon blue"><i class="fa-solid fa-bag-shopping"></i></div>
+    <div class="kpi-value">{{ rfm.frequency }}</div>
+    <div class="kpi-label">Order Count</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-icon cyan"><i class="fa-solid fa-calculator"></i></div>
+    <div class="kpi-value">£{{ "{:,.2f}".format(rfm.avg_order_value) }}</div>
+    <div class="kpi-label">Avg Order Value</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-icon purple"><i class="fa-solid fa-gem"></i></div>
+    <div class="kpi-value" style="font-size:20px;background:var(--gradient-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">£{{ "{:,.2f}".format(rfm.clv) }}</div>
+    <div class="kpi-label">Lifetime Value</div>
+  </div>
+</div>
+
+<!-- Spending Trend + Purchase History -->
+<div class="grid-2 mb-6">
+
+  <!-- Spending Trend Chart -->
+  <div class="glass-card">
+    <div class="card-title"><i class="fa-solid fa-chart-line"></i> Spending Trend</div>
+    {% if transactions %}
+    <div class="chart-container" style="height:220px"><canvas id="spendChart"></canvas></div>
+    <div class="mt-3 grid-3">
+      <div><div class="text-sm text-muted">Days Since Purchase</div><div style="font-size:16px;font-weight:700">{{ rfm.recency }}d</div></div>
+      <div><div class="text-sm text-muted">Last Purchase</div><div style="font-size:16px;font-weight:700">{{ rfm.last_purchase_date }}</div></div>
+      <div><div class="text-sm text-muted">Unique Products</div><div style="font-size:16px;font-weight:700">{{ rfm.unique_products }}</div></div>
+    </div>
+    {% else %}
+    <div class="empty-state"><i class="fa-solid fa-chart-line"></i><p>No transaction history yet.</p></div>
+    {% endif %}
+  </div>
+
+  <!-- Prediction History -->
+  <div class="glass-card">
+    <div class="card-title"><i class="fa-solid fa-brain"></i> Analysis History</div>
+    {% if predictions %}
+    <div class="table-wrapper">
+      <table class="analytics-table">
+        <thead><tr><th>Category</th><th>Retention Risk</th><th>%</th><th>Date</th></tr></thead>
+        <tbody>
+          {% for p in predictions[:8] %}
+          <tr>
+            <td><span class="seg-badge badge-{{ 'vip' if 'Best' in (p.customer_category or '') else 'loyal' if 'Repeat' in (p.customer_category or '') else 'regular' if 'Standard' in (p.customer_category or '') else 'risk' }}" style="font-size:11px">{{ p.customer_category or '—' }}</span></td>
+            <td><span class="seg-badge badge-{{ 'risk' if 'High' in (p.retention_risk or '') else 'warn' if 'Medium' in (p.retention_risk or '') else 'safe' }}" style="font-size:11px">{{ p.retention_risk or '—' }}</span></td>
+            <td class="text-sm">{{ (p.churn_probability*100)|round(1) }}%</td>
+            <td class="text-muted text-sm">{{ p.prediction_time[:10] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state"><i class="fa-solid fa-brain"></i><p>No analysis run yet.</p></div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Purchase History Table -->
+{% if transactions %}
+<div class="glass-card mb-6">
+  <div class="card-title"><i class="fa-solid fa-receipt"></i> Purchase History</div>
+  <div class="table-wrapper">
+    <table class="analytics-table">
+      <thead><tr><th>Date</th><th>Product</th><th>Amount</th></tr></thead>
+      <tbody>
+        {% for t in transactions %}
+        <tr>
+          <td>{{ t.purchase_date }}</td>
+          <td>{{ t.product_purchased or '—' }}</td>
+          <td style="font-weight:600">£{{ "{:,.2f}".format(t.purchase_amount) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Recommended Products -->
+{% if rec_cards %}
+<div class="glass-card mb-6">
+  <div class="card-title"><i class="fa-solid fa-wand-magic-sparkles"></i> Frequently Bought Together — based on "{{ rec_product }}"</div>
+  <div class="grid-3">
+    {% for card in rec_cards %}
+    <div class="rec-card">
+      <div class="rec-rank">{{ card.rank }}</div>
+      <div class="rec-product">{{ card.product }}</div>
+      <div class="rec-metrics">
+        <div class="rec-metric"><span class="label">Recommendation Strength</span><span class="value" style="color:#10b981">{{ card.conf }}</span></div>
+        <div class="rec-metric"><span class="label">Bundle Strength</span><span class="value">{{ card.lift }}×</span></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Suggested Actions -->
+{% if latest_pred %}
+<div class="glass-card">
+  <div class="card-title"><i class="fa-solid fa-bolt-lightning"></i> Suggested Business Actions</div>
+  <div class="grid-2">
+    {% if latest_pred.customer_category %}
+    <div>
+      <div class="text-sm text-muted mb-2">Based on Customer Category</div>
+      {% set cat_actions = {'Best Customers':['Send VIP loyalty rewards','Offer early access to new products','Request testimonials or referrals'],
+                            'Repeat Customers':['Offer subscription or bundle deal','Send personalised thank-you','Provide exclusive member discounts'],
+                            'Standard Customers':['Send product recommendations','Run promotional campaigns','Invite to loyalty programme'],
+                            'Customers You May Lose':['Send re-engagement offers','Follow up with personal call','Provide win-back discount']} %}
+      {% for a in cat_actions.get(latest_pred.customer_category, []) %}
+      <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> {{ a }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if latest_pred.retention_risk %}
+    <div>
+      <div class="text-sm text-muted mb-2">Based on Retention Risk</div>
+      {% set risk_actions = {'High Retention Risk':['Send loyalty offer immediately','Run re-engagement campaign','Contact high-value customers directly'],
+                             'Medium Retention Risk':['Send personalised check-in','Offer product recommendation','Invite to upcoming sale'],
+                             'Low Retention Risk':['Continue regular engagement','Reward with occasional offers','Ask for product feedback']} %}
+      {% for a in risk_actions.get(latest_pred.retention_risk, []) %}
+      <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> {{ a }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const spendData = {{ spend_trend | safe }};
+if (spendData && spendData.length) {
+  new Chart(document.getElementById('spendChart'), {
+    type: 'line',
+    data: {
+      labels: spendData.map(d => d.date),
+      datasets: [{
+        label: 'Purchase Amount',
+        data: spendData.map(d => d.amount),
+        borderColor: '#10b981',
+        backgroundColor: 'rgba(16,185,129,0.1)',
+        fill: true, tension: 0.4,
+        pointRadius: 5, pointBackgroundColor: '#10b981',
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` £${ctx.raw.toLocaleString()}` } } },
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#475569', maxTicksLimit: 6 } },
+        y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#475569', callback: v => '£'+v } }
+      }
+    }
+  });
+}
+</script>
+{% endblock %}

@@ -1,213 +1,146 @@
 {% extends "base.html" %}
-{% block title %}Product Recommendations — Smart Retail Analytics{% endblock %}
+{% block title %}Frequently Bought Together{% endblock %}
+{% block page_title %}<i class="fa-solid fa-wand-magic-sparkles me-2" style="color:#8b5cf6"></i>Frequently Bought Together{% endblock %}
 
 {% block content %}
-
-<!-- Page Header -->
 <div class="page-header">
-  <div class="page-eyebrow">🤖 AI Recommendations</div>
-  <h1>Product Recommendations</h1>
-  <p>Discover which products customers frequently buy together using market-basket association rules</p>
+  <h1>Frequently Bought Together</h1>
+  <p>Product Pairing Insights — discover which products customers buy alongside each other.</p>
 </div>
 
-<!-- Product Selector -->
-<div class="search-panel">
-  <div class="search-title">Select a Product</div>
-  <div class="search-sub">Choose a product to see the top items frequently bought alongside it, ranked by Lift score.</div>
-  <form method="POST" action="{{ url_for('recommendations') }}" id="recForm">
-    <div class="search-row">
-      <div style="flex:1; min-width:220px; max-width:420px;">
-        <select name="product" class="select-custom" id="productSelect" onchange="this.form.submit()">
-          <option value="">— choose a product —</option>
+<!-- Overview KPIs -->
+<div class="grid-3 mb-6">
+  <div class="glass-card text-center">
+    <div class="kpi-icon purple" style="margin:0 auto 12px"><i class="fa-solid fa-diagram-project"></i></div>
+    <div class="kpi-value">{{ overview.total }}</div>
+    <div class="kpi-label">Product Pairings Found</div>
+  </div>
+  <div class="glass-card text-center">
+    <div class="kpi-icon blue" style="margin:0 auto 12px"><i class="fa-solid fa-arrow-trend-up"></i></div>
+    <div class="kpi-value">{{ overview.max_lift }}</div>
+    <div class="kpi-label">Highest Bundle Strength</div>
+  </div>
+  <div class="glass-card text-center">
+    <div class="kpi-icon green" style="margin:0 auto 12px"><i class="fa-solid fa-bullseye"></i></div>
+    <div class="kpi-value">{{ overview.avg_conf }}</div>
+    <div class="kpi-label">Avg Recommendation Strength</div>
+  </div>
+</div>
+
+<!-- Search Form -->
+<div class="glass-card mb-6">
+  <div class="card-title"><i class="fa-solid fa-magnifying-glass"></i> Find Product Pairings</div>
+  <form method="POST">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-8">
+        <label class="form-label">Select a Product</label>
+        <select name="product" class="form-control" required>
+          <option value="">— Select a product to see what goes with it —</option>
           {% for p in all_products %}
-          <option value="{{ p }}" {% if selected and p == selected %}selected{% endif %}>{{ p }}</option>
+          <option value="{{ p }}" {{ 'selected' if selected == p }}>{{ p }}</option>
           {% endfor %}
         </select>
       </div>
-      <button type="submit" class="btn-primary">
-        <i class="bi bi-stars"></i> Get Recommendations
-      </button>
-      {% if selected %}
-      <a href="{{ url_for('recommendations') }}" class="btn-ghost">
-        <i class="bi bi-x-circle"></i> Clear
-      </a>
-      {% endif %}
-      <div class="search-range-hint">
-        <i class="bi bi-list-ul me-1"></i>
-        <strong>{{ all_products|length }}</strong> products available
+      <div class="col-md-4">
+        <button type="submit" class="btn btn-primary w-100">
+          <i class="fa-solid fa-wand-magic-sparkles"></i> Find Product Pairings
+        </button>
       </div>
     </div>
   </form>
 </div>
 
-<!-- No product selected — overview stats -->
-{% if not selected %}
+{% if rec_warning %}
+<div class="info-box warn"><i class="fa-solid fa-triangle-exclamation"></i> {{ rec_warning }}</div>
+{% endif %}
 
-{% if overview %}
-<div class="row g-3 mb-4">
-  <div class="col-md-4">
-    <div class="stat-card">
-      <div class="stat-card-val stat-indigo">{{ overview.total }}</div>
-      <div class="stat-card-lbl"><i class="bi bi-list-ul me-1"></i>Total Rules</div>
-    </div>
+{% if selected and rec_cards %}
+<div class="flex-between mb-4">
+  <div>
+    <div class="text-sm text-muted mb-1">Customers who buy this also buy…</div>
+    <div style="font-size:17px;font-weight:700;color:var(--text-primary)">{{ selected }}</div>
   </div>
-  <div class="col-md-4">
-    <div class="stat-card">
-      <div class="stat-card-val stat-purple">{{ overview.max_lift }}×</div>
-      <div class="stat-card-lbl"><i class="bi bi-lightning-fill me-1"></i>Max Lift Score</div>
+  <div class="d-flex gap-3">
+    <div class="glass-card text-center" style="padding:12px 20px;min-width:80px">
+      <div style="font-size:20px;font-weight:700;color:#8b5cf6">{{ stats.count }}</div>
+      <div class="text-sm text-muted">Pairings</div>
     </div>
-  </div>
-  <div class="col-md-4">
-    <div class="stat-card">
-      <div class="stat-card-val stat-cyan">{{ overview.avg_conf }}</div>
-      <div class="stat-card-lbl"><i class="bi bi-bullseye me-1"></i>Avg Confidence</div>
+    <div class="glass-card text-center" style="padding:12px 20px;min-width:80px">
+      <div style="font-size:20px;font-weight:700;color:#3b82f6">{{ stats.max_lift }}</div>
+      <div class="text-sm text-muted">Max Bundle Strength</div>
+    </div>
+    <div class="glass-card text-center" style="padding:12px 20px;min-width:80px">
+      <div style="font-size:20px;font-weight:700;color:#10b981">{{ stats.avg_conf }}</div>
+      <div class="text-sm text-muted">Avg Rec. Strength</div>
     </div>
   </div>
 </div>
-{% endif %}
+
+<div class="grid-3 mb-6">
+  {% for card in rec_cards %}
+  <div class="rec-card">
+    <div class="rec-rank">{{ card.rank }}</div>
+    <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Frequently Bought Together</div>
+    <div class="rec-product">{{ card.product }}</div>
+    <hr class="divider" style="margin:10px 0">
+    <div class="rec-metrics">
+      <div class="rec-metric">
+        <span class="label">Rec. Strength</span>
+        <span class="value" style="color:#10b981">{{ card.conf }}</span>
+      </div>
+      <div class="rec-metric">
+        <span class="label">Bundle Strength</span>
+        <span class="value" style="color:#3b82f6">{{ card.lift }}×</span>
+      </div>
+    </div>
+    <div class="progress-track mt-3">
+      <div class="progress-fill" style="width:{{ card.conf_pct }}%;background:linear-gradient(90deg,#059669,#10b981)"></div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
 
 <div class="glass-card">
-  <div class="empty-state">
-    <div class="empty-state-icon">🛒</div>
-    <h3>Select a Product Above</h3>
-    <p>Pick any product from the dropdown to see which items are most frequently bought alongside it, ranked by association strength (Lift score).</p>
+  <div class="card-title"><i class="fa-solid fa-chart-bar"></i> Bundle Strength Comparison</div>
+  <div class="chart-container" style="height:{{ [280, rec_cards|length*42]|max }}px">
+    <canvas id="liftChart"></canvas>
   </div>
-</div>
-
-{% endif %}
-
-<!-- Warning -->
-{% if rec_warning %}
-<div class="alert-box alert-warn mb-3">
-  <i class="bi bi-exclamation-triangle-fill"></i>
-  <span>{{ rec_warning }}</span>
 </div>
 {% endif %}
 
-<!-- Results -->
-{% if selected and rec_cards %}
-
-<!-- Stats cards -->
-<div class="row g-3 mb-4">
-  <div class="col-md-4">
-    <div class="kpi-card">
-      <div class="kpi-glow" data-bg="#6366f1"></div>
-      <span class="kpi-icon">📦</span>
-      <div class="kpi-label">Recommendations Found</div>
-      <div class="kpi-value">{{ stats.count }}</div>
-      <div class="kpi-delta positive"><i class="bi bi-arrow-up-short"></i> Products matched</div>
-      <div class="kpi-accent-bar" data-bg="linear-gradient(90deg,#6366f1,transparent)"></div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="kpi-card">
-      <div class="kpi-glow" data-bg="#a855f7"></div>
-      <span class="kpi-icon">⚡</span>
-      <div class="kpi-label">Max Lift Score</div>
-      <div class="kpi-value">{{ stats.max_lift }}×</div>
-      <div class="kpi-delta positive"><i class="bi bi-arrow-up-short"></i> Strongest association</div>
-      <div class="kpi-accent-bar" data-bg="linear-gradient(90deg,#a855f7,transparent)"></div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="kpi-card">
-      <div class="kpi-glow" data-bg="#06b6d4"></div>
-      <span class="kpi-icon">🎯</span>
-      <div class="kpi-label">Avg Confidence</div>
-      <div class="kpi-value kpi-value-sm">{{ stats.avg_conf }}</div>
-      <div class="kpi-delta positive"><i class="bi bi-arrow-up-short"></i> Rule reliability</div>
-      <div class="kpi-accent-bar" data-bg="linear-gradient(90deg,#06b6d4,transparent)"></div>
-    </div>
-  </div>
+{% if not selected %}
+<div class="empty-state glass-card">
+  <i class="fa-solid fa-cart-arrow-down"></i>
+  <p>Select a product above to discover which products are frequently bought together.</p>
 </div>
-
-<!-- Selected label -->
-<div class="rec-label-bar mb-3">
-  Showing recommendations for: <strong>{{ selected }}</strong>
-</div>
-
-<!-- Cards + Chart -->
-<div class="row g-4 mb-4">
-  <div class="col-lg-6">
-    <div class="glass-card">
-      <div class="section-title"><i class="bi bi-bag-check"></i> Recommended Products</div>
-      {% for card in rec_cards %}
-      <div class="rec-card">
-        <span class="rec-rank">#{{ card.rank }}</span>
-        <span class="rec-name">{{ card.product }}</span>
-        <span class="rec-lift"><i class="bi bi-lightning-fill"></i> {{ card.lift }}×</span>
-        <div class="rec-cbar">
-          <div class="rec-cfill" data-width="{{ card.conf_pct }}%"></div>
-        </div>
-        <span class="rec-cpct">{{ card.conf }}</span>
-      </div>
-      {% endfor %}
-    </div>
-  </div>
-  <div class="col-lg-6">
-    <div class="glass-card">
-      <div class="section-title"><i class="bi bi-bar-chart-horizontal-fill"></i> Lift Score Comparison</div>
-      <div id="liftChart" class="chart-wrap"></div>
-    </div>
-  </div>
-</div>
-
-<!-- Full table accordion -->
-<div class="accordion accordion-dark">
-  <div class="accordion-item">
-    <h2 class="accordion-header">
-      <button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#rulesCollapse">
-        <i class="bi bi-table me-2"></i> Full Rules Table
-      </button>
-    </h2>
-    <div id="rulesCollapse" class="accordion-collapse collapse">
-      <div class="accordion-body">
-        <div class="table-responsive">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>#</th><th>Recommended Product</th>
-                <th>Confidence</th><th>Lift</th><th>Support</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for card in rec_cards %}
-              <tr>
-                <td>{{ card.rank }}</td>
-                <td>{{ card.product }}</td>
-                <td>{{ card.conf }}</td>
-                <td class="fw-semibold">{{ card.lift }}×</td>
-                <td>{{ card.support }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
 {% endif %}
 {% endblock %}
 
-{% block page_scripts %}
-{% if chart_lift %}
-<script type="application/json" id="_liftData">{{ chart_lift | safe }}</script>
-{% endif %}
+{% block extra_scripts %}
+{% if rec_cards %}
 <script>
-  // Apply all dynamic styles from data-* attributes
-  document.querySelectorAll('[data-bg]').forEach(function(el) {
-    el.style.background = el.getAttribute('data-bg');
-  });
-  document.querySelectorAll('[data-width]').forEach(function(el) {
-    el.style.width = el.getAttribute('data-width');
-  });
-</script>
-
-{% if chart_lift %}
-<script>
-  renderChart('liftChart', document.getElementById('_liftData').textContent);
+const cards = {{ rec_cards | tojson | safe }};
+const labels = cards.map(c=>c.product.length>36?c.product.substring(0,36)+'…':c.product);
+new Chart(document.getElementById('liftChart'),{
+  type:'bar',
+  data:{
+    labels,
+    datasets:[{
+      label:'Bundle Strength',
+      data:cards.map(c=>c.lift_float),
+      backgroundColor:cards.map((_,i)=>`hsla(${260-i*12},70%,65%,0.75)`),
+      borderRadius:6,borderSkipped:false,
+    }]
+  },
+  options:{
+    indexAxis:'y',maintainAspectRatio:false,
+    plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>` Bundle Strength: ${ctx.raw}×`}}},
+    scales:{
+      x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b'}},
+      y:{grid:{display:false},ticks:{color:'#94a3b8',font:{size:12}}}
+    }
+  }
+});
 </script>
 {% endif %}
 {% endblock %}

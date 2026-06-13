@@ -1,0 +1,321 @@
+{% extends "base.html" %}
+{% block title %}Add Customer{% endblock %}
+{% block page_title %}<i class="fa-solid fa-user-plus me-2" style="color:#10b981"></i>Add Customer & Record Purchase{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Add Customer</h1>
+  <p>Add a new customer or record a purchase for an existing customer. The system automatically handles all analytics.</p>
+</div>
+
+{% if not seg_loaded or not churn_loaded %}
+<div class="info-box warn mb-4">
+  <i class="fa-solid fa-triangle-exclamation"></i>
+  ML models not fully loaded — predictions may be unavailable.
+</div>
+{% endif %}
+
+<!-- Customer Stats Widget -->
+<div class="grid-3 mb-6">
+  <div class="glass-card text-center">
+    <div class="kpi-icon purple" style="margin:0 auto 10px"><i class="fa-solid fa-users"></i></div>
+    <div class="kpi-value">{{ cust_stats.total }}</div>
+    <div class="kpi-label">Total Customers Logged</div>
+  </div>
+  <div class="glass-card text-center">
+    <div class="kpi-icon blue" style="margin:0 auto 10px"><i class="fa-solid fa-id-card"></i></div>
+    <div style="font-size:14px; font-weight:700; color:var(--text-primary); margin-bottom:4px">
+      {{ cust_stats.first_id }} → {{ cust_stats.last_id }}
+    </div>
+    <div class="kpi-label">Customer ID Range</div>
+  </div>
+  <div class="glass-card text-center">
+    <div class="kpi-icon green" style="margin:0 auto 10px"><i class="fa-solid fa-clock-rotate-left"></i></div>
+    <div style="font-size:18px; font-weight:700; color:#10b981">{{ cust_stats.last_id }}</div>
+    <div class="kpi-label">Latest Customer Added</div>
+  </div>
+</div>
+
+<div class="grid-2 mb-6">
+
+  <!-- Entry Form -->
+  <div class="glass-card">
+    <div class="card-title"><i class="fa-solid fa-pen-to-square"></i> Customer & Purchase Details</div>
+
+    {% if form_err %}
+    <div class="info-box error mb-4"><i class="fa-solid fa-circle-exclamation"></i> {{ form_err }}</div>
+    {% endif %}
+
+    <form method="POST" id="entryForm">
+
+      <!-- New vs Existing toggle -->
+      <div class="customer-mode-toggle mb-4">
+        <label class="mode-option">
+          <input type="radio" name="mode" value="new" id="modeNew" checked onchange="toggleMode('new')">
+          <span class="mode-label">
+            <i class="fa-solid fa-user-plus"></i>
+            <strong>New Customer</strong>
+            <small>First visit</small>
+          </span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="mode" value="existing" id="modeExisting" onchange="toggleMode('existing')">
+          <span class="mode-label">
+            <i class="fa-solid fa-user-check"></i>
+            <strong>Returning Customer</strong>
+            <small>Record another purchase</small>
+          </span>
+        </label>
+      </div>
+
+      <!-- New customer fields -->
+      <div id="newCustomerFields">
+        <div class="form-group">
+          <label class="form-label">Customer Name *</label>
+          <input type="text" name="name" id="nameInput" class="form-control" placeholder="e.g. Sarah Johnson"
+                 value="{{ result.name if result and result.get('name') else '' }}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Phone Number (optional)</label>
+          <input type="tel" name="phone" class="form-control" placeholder="e.g. +44 7700 900123">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Assigned Customer ID</label>
+          <div class="assigned-id-box">
+            <span class="assigned-id-badge">{{ next_id }}</span>
+            <span class="text-muted text-sm">Auto-assigned, read-only</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Existing customer lookup -->
+      <div id="existingCustomerFields" style="display:none">
+        <div class="form-group" style="position:relative">
+          <label class="form-label">Search Existing Customer</label>
+          <input type="text" id="existingSearch" class="form-control" placeholder="Type name or Customer ID…" autocomplete="off">
+          <div class="search-dropdown" id="existingDropdown"></div>
+        </div>
+        <input type="hidden" name="existing_customer_id" id="existingCustomerIdInput">
+        <div class="info-box info" id="selectedCustomerInfo" style="display:none">
+          <i class="fa-solid fa-user-check"></i>
+          <span id="selectedCustomerText"></span>
+        </div>
+      </div>
+
+      <hr class="divider">
+
+      <!-- Purchase details (always shown) -->
+      <div class="card-title" style="margin-bottom:12px"><i class="fa-solid fa-bag-shopping"></i> Purchase Details</div>
+
+      <div class="form-group">
+        <label class="form-label">Purchase Amount (£) *</label>
+        <input type="number" step="0.01" min="0.01" name="purchase_amount" class="form-control"
+               placeholder="e.g. 149.99" required
+               value="{{ result.purchase_amount if result else '' }}">
+      </div>
+      <div class="row g-3">
+        <div class="col-6">
+          <div class="form-group">
+            <label class="form-label">Purchase Date *</label>
+            <input type="date" name="purchase_date" class="form-control" required
+                   value="{{ result.purchase_date if result else today }}">
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="form-group">
+            <label class="form-label">Product Purchased</label>
+            <input type="text" name="product_purchased" class="form-control"
+                   placeholder="e.g. Garden Tools Set"
+                   value="{{ result.product if result else '' }}">
+          </div>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary w-100 mt-2" id="submitBtn">
+        <i class="fa-solid fa-bolt"></i> Record Purchase & Run Analysis
+      </button>
+    </form>
+  </div>
+
+  <!-- Result Panel -->
+  <div>
+    {% if result %}
+    <div class="result-card">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);margin-bottom:8px">Analysis Complete</div>
+      <div class="flex-between mb-3">
+        <div>
+          <div style="font-size:20px;font-weight:800;color:var(--text-primary)">
+            {{ result.name or result.customer_id }}
+          </div>
+          <div class="text-sm text-muted">{{ result.customer_id }}</div>
+        </div>
+        <a href="{{ url_for('customer_detail', customer_id=result.customer_id) }}" class="btn btn-outline btn-sm">
+          <i class="fa-solid fa-user"></i> View Profile
+        </a>
+      </div>
+
+      <!-- Category -->
+      <div class="mb-4">
+        <div class="text-sm text-muted mb-2">Customer Category</div>
+        <span class="seg-badge badge-{{ 'vip' if result.segment=='VIP' else 'loyal' if result.segment=='Loyal' else 'regular' if result.segment=='Regular' else 'risk' }}"
+              style="font-size:15px;padding:6px 16px">
+          <i class="fa-solid {{ 'fa-gem' if result.segment=='VIP' else 'fa-heart' if result.segment=='Loyal' else 'fa-cart-shopping' if result.segment=='Regular' else 'fa-triangle-exclamation' }}"></i>
+          {{ result.customer_category }}
+        </span>
+      </div>
+
+      <!-- Retention Risk -->
+      <div class="mb-4">
+        <div class="text-sm text-muted mb-2">Retention Risk</div>
+        <div class="d-flex align-items-center gap-3 mb-2">
+          <span class="seg-badge badge-{{ 'risk' if 'High' in result.retention_risk else 'warn' if 'Medium' in result.retention_risk else 'safe' }}"
+                style="font-size:14px;padding:5px 14px">
+            {{ result.retention_risk }}
+          </span>
+          <span style="font-size:22px;font-weight:800;color:{{ '#ef4444' if 'High' in result.retention_risk else '#f59e0b' if 'Medium' in result.retention_risk else '#10b981' }}">
+            {{ result.churn_pct }}
+          </span>
+        </div>
+        <div class="progress-track" style="height:8px">
+          <div class="progress-fill {{ 'red' if 'High' in result.retention_risk else 'amber' if 'Medium' in result.retention_risk else 'green' }}"
+               style="width:{{ (result.churn_probability*100)|int }}%"></div>
+        </div>
+      </div>
+
+      <!-- RFM Summary -->
+      <hr class="divider">
+      <div class="grid-3 mb-3">
+        <div>
+          <div class="text-sm text-muted">Days Since Purchase</div>
+          <div style="font-size:18px;font-weight:700">{{ result.recency }}d</div>
+        </div>
+        <div>
+          <div class="text-sm text-muted">Order Count</div>
+          <div style="font-size:18px;font-weight:700">{{ result.frequency }}</div>
+        </div>
+        <div>
+          <div class="text-sm text-muted">Total Spending</div>
+          <div style="font-size:18px;font-weight:700">£{{ "{:,.2f}".format(result.monetary) }}</div>
+        </div>
+      </div>
+
+      <!-- CLV -->
+      <div class="glass-card" style="background:rgba(139,92,246,0.08);border-color:rgba(139,92,246,0.2)">
+        <div class="flex-between">
+          <div>
+            <div class="text-sm text-muted">Customer Lifetime Value</div>
+            <div style="font-size:22px;font-weight:800;background:var(--gradient-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">
+              £{{ "{:,.2f}".format(result.clv) }}
+            </div>
+          </div>
+          <i class="fa-solid fa-gem" style="font-size:28px;color:rgba(139,92,246,0.4)"></i>
+        </div>
+      </div>
+
+      <!-- Suggested Actions -->
+      {% if result.actions %}
+      <div class="insight-actions mt-3">
+        <div class="text-sm text-muted mb-2">Suggested Actions</div>
+        {% for a in result.actions %}
+        <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> {{ a }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="info-box success mt-4">
+        <i class="fa-solid fa-check-circle"></i> Customer record and purchase saved successfully.
+      </div>
+    </div>
+
+    {% else %}
+    <div class="glass-card empty-state" style="height:100%;min-height:500px;display:flex;flex-direction:column;align-items:center;justify-content:center">
+      <i class="fa-solid fa-robot" style="font-size:52px;background:var(--gradient-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:16px"></i>
+      <p style="font-size:15px;color:var(--text-secondary);margin-bottom:6px">Results will appear here</p>
+      <p class="text-sm text-muted">Fill in the form and click <strong>Record Purchase & Run Analysis</strong></p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Recent Activity -->
+{% if recent %}
+<div class="glass-card">
+  <div class="card-title"><i class="fa-solid fa-history"></i> Recent Activity</div>
+  <div class="table-wrapper">
+    <table class="analytics-table">
+      <thead>
+        <tr><th>Customer ID</th><th>Category</th><th>Retention Risk</th><th>Probability</th><th>Time</th></tr>
+      </thead>
+      <tbody>
+        {% for p in recent %}
+        <tr>
+          <td><a href="{{ url_for('customer_detail', customer_id=p.customer_id) }}" style="color:#8b5cf6;font-weight:600">{{ p.customer_id }}</a></td>
+          <td><span class="seg-badge badge-{{ 'vip' if p.customer_category in ['Best Customers','VIP'] else 'loyal' if p.customer_category in ['Repeat Customers','Loyal'] else 'regular' if p.customer_category in ['Standard Customers','Regular'] else 'risk' }}">{{ p.customer_category }}</span></td>
+          <td><span class="seg-badge badge-{{ 'risk' if 'High' in (p.retention_risk or '') else 'warn' if 'Medium' in (p.retention_risk or '') else 'safe' }}">{{ p.retention_risk or '—' }}</span></td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div class="progress-track" style="width:60px"><div class="progress-fill {{ 'red' if p.churn_probability>=0.7 else 'amber' if p.churn_probability>=0.4 else 'green' }}" style="width:{{ (p.churn_probability*100)|int }}%"></div></div>
+              <span class="text-sm">{{ (p.churn_probability*100)|round(1) }}%</span>
+            </div>
+          </td>
+          <td class="text-muted text-sm">{{ p.prediction_time[:16] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function toggleMode(mode) {
+  document.getElementById('newCustomerFields').style.display   = mode === 'new'      ? 'block' : 'none';
+  document.getElementById('existingCustomerFields').style.display = mode === 'existing' ? 'block' : 'none';
+}
+
+// Existing customer search autocomplete
+const exInput    = document.getElementById('existingSearch');
+const exDropdown = document.getElementById('existingDropdown');
+let exTimer;
+exInput?.addEventListener('input', () => {
+  clearTimeout(exTimer);
+  const q = exInput.value.trim();
+  if (q.length < 2) { exDropdown.style.display = 'none'; return; }
+  exTimer = setTimeout(() => {
+    fetch(`/api/search-customers?q=${encodeURIComponent(q)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.length) { exDropdown.style.display = 'none'; return; }
+        exDropdown.innerHTML = data.map(c =>
+          `<div class="search-dropdown-item" onclick="selectExisting('${c.customer_id}','${c.name||''}')">
+             <strong>${c.customer_id}</strong> — ${c.name || 'No name'} ${c.phone ? '· '+c.phone : ''}
+           </div>`
+        ).join('');
+        exDropdown.style.display = 'block';
+      });
+  }, 250);
+});
+
+function selectExisting(id, name) {
+  document.getElementById('existingCustomerIdInput').value = id;
+  exInput.value = `${id} — ${name}`;
+  exDropdown.style.display = 'none';
+  const info = document.getElementById('selectedCustomerInfo');
+  document.getElementById('selectedCustomerText').textContent = `Selected: ${id} (${name || 'No name'})`;
+  info.style.display = 'flex';
+}
+
+document.addEventListener('click', e => {
+  if (!exInput?.contains(e.target) && !exDropdown?.contains(e.target))
+    exDropdown && (exDropdown.style.display = 'none');
+});
+
+document.getElementById('entryForm')?.addEventListener('submit', () => {
+  const btn = document.getElementById('submitBtn');
+  btn.innerHTML = '<span class="spinner"></span> Analysing…';
+  btn.disabled = true;
+});
+</script>
+{% endblock %}

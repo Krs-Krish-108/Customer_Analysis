@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}404 — Not Found{% endblock %}
+{% block page_title %}Page Not Found{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;flex-direction:column;text-align:center">
+  <div style="font-size:80px;font-weight:900;background:var(--gradient-main);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;line-height:1">404</div>
+  <div style="font-size:20px;font-weight:700;color:var(--text-primary);margin:12px 0 8px">Customer not found</div>
+  <p class="text-muted">That customer ID doesn't exist in the system.</p>
+  <div class="d-flex gap-3 mt-4">
+    <a href="{{ url_for('customers') }}" class="btn btn-primary"><i class="fa-solid fa-address-book"></i> Browse All Customers</a>
+    <a href="{{ url_for('customer_entry') }}" class="btn btn-outline"><i class="fa-solid fa-user-plus"></i> Add Customer</a>
+  </div>
+</div>
+{% endblock %}

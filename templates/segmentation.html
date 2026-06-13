@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Customer Categories{% endblock %}
+{% block page_title %}<i class="fa-solid fa-users-viewfinder me-2" style="color:#3b82f6"></i>Customer Categories{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Customer Categories</h1>
+  <p>How your customers are classified based on their purchase behaviour — Days Since Purchase, Order Count, and Customer Spending.</p>
+</div>
+
+{% if error %}
+<div class="info-box error"><i class="fa-solid fa-circle-exclamation"></i> No customer data available.</div>
+{% else %}
+
+<!-- Category KPIs -->
+<div class="kpi-grid mb-6">
+  {% for s in seg_data %}
+  <div class="kpi-card" style="cursor:pointer" onclick="window.location.href='{{ url_for('customers') }}?category={{ s.category | urlencode }}'">
+    <div class="kpi-icon {{ 'green' if s.segment=='VIP' else 'blue' if s.segment=='Loyal' else 'cyan' if s.segment=='Regular' else 'rose' }}">
+      <i class="fa-solid {{ 'fa-gem' if s.segment=='VIP' else 'fa-heart' if s.segment=='Loyal' else 'fa-cart-shopping' if s.segment=='Regular' else 'fa-triangle-exclamation' }}"></i>
+    </div>
+    <div class="kpi-value">{{ "{:,}".format(s.count) }}</div>
+    <div class="kpi-label">{{ s.category }}</div>
+    <div class="mt-3">
+      <div class="progress-track"><div class="progress-fill {{ 'green' if s.segment=='VIP' else 'blue' if s.segment=='Loyal' else '' }}" style="width:{{ s.pct }}%"></div></div>
+      <div class="text-sm text-muted mt-1">{{ s.pct }}% of customers</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Charts Row -->
+<div class="grid-2 mb-6">
+  <div class="glass-card">
+    <div class="flex-between mb-4">
+      <div class="card-title" style="margin-bottom:0"><i class="fa-solid fa-chart-pie"></i> Customer Distribution</div>
+      <div class="period-tabs" id="catViewTabs">
+        <button class="period-tab active" data-view="count">Customers</button>
+        <button class="period-tab" data-view="revenue">Revenue</button>
+        <button class="period-tab" data-view="avg">Avg Spending</button>
+      </div>
+    </div>
+    <div class="chart-container" style="height:280px"><canvas id="segDonut"></canvas></div>
+  </div>
+  <div class="glass-card">
+    <div class="card-title"><i class="fa-solid fa-chart-bar"></i> Average Customer Metrics by Category</div>
+    <div class="chart-container" style="height:280px"><canvas id="rfmBar"></canvas></div>
+  </div>
+</div>
+
+<!-- Category Insight Cards with Actions -->
+<div class="grid-2 mb-6">
+  {% for s in seg_data %}
+  <div class="glass-card">
+    <div class="flex-between mb-3">
+      <span class="seg-badge badge-{{ 'vip' if s.segment=='VIP' else 'loyal' if s.segment=='Loyal' else 'regular' if s.segment=='Regular' else 'risk' }}" style="font-size:13px">
+        {{ s.category }}
+      </span>
+      <span style="font-weight:700">{{ "{:,}".format(s.count) }} customers</span>
+    </div>
+    <div class="grid-3 mb-3">
+      <div><div class="text-sm text-muted">Avg Days Since Purchase</div><div style="font-weight:700">{{ s.avg_recency }}d</div></div>
+      <div><div class="text-sm text-muted">Avg Orders</div><div style="font-weight:700">{{ s.avg_frequency }}</div></div>
+      <div><div class="text-sm text-muted">Avg Spending</div><div style="font-weight:700">£{{ "{:,.0f}".format(s.avg_monetary) }}</div></div>
+    </div>
+    {% if s.actions %}
+    <div class="insight-actions">
+      {% for a in s.actions %}
+      <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> {{ a }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <a href="{{ url_for('customers') }}?category={{ s.category | urlencode }}" class="btn btn-outline btn-sm w-100 mt-3">
+      View {{ s.category }} <i class="fa-solid fa-arrow-right"></i>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Sample Table -->
+<div class="glass-card">
+  <div class="card-title"><i class="fa-solid fa-list"></i> Sample Customers</div>
+  <div class="table-wrapper">
+    <table class="analytics-table">
+      <thead><tr><th>Customer ID</th><th>Category</th><th>Days Since Purchase</th><th>Order Count</th><th>Customer Spending</th></tr></thead>
+      <tbody>
+        {% for row in sample %}
+        <tr>
+          <td style="font-weight:600">{{ row.CustomerID }}</td>
+          <td><span class="seg-badge badge-{{ 'vip' if row.Segment=='VIP' else 'loyal' if row.Segment=='Loyal' else 'regular' if row.Segment=='Regular' else 'risk' }}" style="font-size:11px">{{ row.category }}</span></td>
+          <td>{{ row.Recency }}d</td>
+          <td>{{ row.Frequency }}</td>
+          <td>£{{ "{:,.2f}".format(row.Monetary) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const segData = {{ seg_data_json | safe }};
+let donutChart;
+function buildDonut(view) {
+  if (donutChart) donutChart.destroy();
+  const vals = view==='count'   ? segData.map(s=>s.count)
+             : view==='revenue' ? segData.map(s=>s.total_revenue)
+             :                    segData.map(s=>s.avg_monetary);
+  donutChart = new Chart(document.getElementById('segDonut'),{
+    type:'doughnut',
+    data:{ labels:segData.map(s=>s.category), datasets:[{data:vals,backgroundColor:segData.map(s=>s.color),borderWidth:0,hoverOffset:8}] },
+    options:{
+      cutout:'65%',maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom',labels:{color:'#94a3b8',font:{size:12},boxWidth:12}}},
+      onClick:(evt,els)=>{ if(els.length){const cat=segData[els[0].index].category;window.location.href=`/customers?category=${encodeURIComponent(cat)}`;} }
+    }
+  });
+}
+buildDonut('count');
+document.querySelectorAll('#catViewTabs .period-tab').forEach(btn=>{
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('#catViewTabs .period-tab').forEach(b=>b.classList.remove('active'));
+    this.classList.add('active');
+    buildDonut(this.dataset.view);
+  });
+});
+
+new Chart(document.getElementById('rfmBar'),{
+  type:'bar',
+  data:{
+    labels:segData.map(s=>s.category),
+    datasets:[
+      {label:'Avg Days Since Purchase',data:segData.map(s=>s.avg_recency),backgroundColor:'rgba(59,130,246,0.7)',borderRadius:6},
+      {label:'Avg Order Count',data:segData.map(s=>s.avg_frequency),backgroundColor:'rgba(139,92,246,0.7)',borderRadius:6},
+    ]
+  },
+  options:{
+    maintainAspectRatio:false,
+    plugins:{legend:{labels:{color:'#94a3b8'}}},
+    scales:{
+      x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b',font:{size:11}}},
+      y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b'}}
+    }
+  }
+});
+</script>
+{% endblock %}

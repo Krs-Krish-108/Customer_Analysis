@@ -1,474 +1,230 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — Smart Retail Analytics{% endblock %}
+{% block title %}Business Dashboard{% endblock %}
+{% block page_title %}<i class="fa-solid fa-gauge-high me-2" style="color:#8b5cf6"></i>Business Dashboard{% endblock %}
 
 {% block content %}
 
-<!-- Page Header -->
-<div class="page-header">
-  <div class="page-eyebrow">🛍️ Smart Retail Analytics</div>
-  <h1>Executive Dashboard</h1>
-  <p>High-level overview of your customer base, segments, and revenue performance</p>
-</div>
-
 {% if error %}
-<div class="alert-box alert-warn mb-4">
-  <i class="bi bi-exclamation-triangle-fill"></i>
-  <span>Customer data is unavailable — please check that <code>customer_segments.csv</code> is present.</span>
-</div>
+<div class="info-box error"><i class="fa-solid fa-circle-exclamation"></i> No customer data available.</div>
 {% else %}
 
-<!-- Business Alerts -->
-{% if is_high_risk %}
-<div class="alert-box alert-warn mb-3">
-  <i class="bi bi-exclamation-triangle-fill"></i>
-  <div>
-    <strong>{{ risk_pct_str }} of customers are At-Risk.</strong>
-    Deploy win-back campaigns with time-limited discounts before churn escalates.
-  </div>
-</div>
-{% endif %}
-<div class="alert-box alert-ok mb-4">
-  <i class="bi bi-gem"></i>
-  <div>
-    <strong>{{ vip_count }} VIP customers</strong> driving premium revenue —
-    prioritise with exclusive loyalty rewards and early product-launch access.
-  </div>
-</div>
-
 <!-- KPI Cards -->
-<div class="row g-3 mb-4">
-  <div class="col-xl-3 col-sm-6">
-    <div class="kpi-card">
-      <div class="kpi-glow" data-bg="#6366f1"></div>
-      <span class="kpi-icon">👥</span>
-      <div class="kpi-label">Total Customers</div>
-      <div class="kpi-value">{{ total }}</div>
-      <div class="kpi-delta positive"><i class="bi bi-arrow-up-short"></i> Records in dataset</div>
-      <div class="kpi-accent-bar" data-bg="linear-gradient(90deg,#6366f1,transparent)"></div>
-    </div>
+<div class="kpi-grid mb-2">
+  <div class="kpi-card">
+    <div class="kpi-icon blue"><i class="fa-solid fa-sterling-sign"></i></div>
+    <div class="kpi-value">£{{ "{:,.0f}".format(summary.total_revenue) }}</div>
+    <div class="kpi-label">Total Revenue</div>
   </div>
-  <div class="col-xl-3 col-sm-6">
-    <div class="kpi-card">
-      <div class="kpi-glow" data-bg="#a855f7"></div>
-      <span class="kpi-icon">💎</span>
-      <div class="kpi-label">VIP Customers</div>
-      <div class="kpi-value">{{ vip_count }}</div>
-      <div class="kpi-delta positive"><i class="bi bi-arrow-up-short"></i> {{ vip_pct }}% of base</div>
-      <div class="kpi-accent-bar" data-bg="linear-gradient(90deg,#a855f7,transparent)"></div>
-    </div>
+  <div class="kpi-card">
+    <div class="kpi-icon purple"><i class="fa-solid fa-users"></i></div>
+    <div class="kpi-value">{{ "{:,}".format(summary.total_customers) }}</div>
+    <div class="kpi-label">Total Customers</div>
   </div>
-  <div class="col-xl-3 col-sm-6">
-    <div class="kpi-card">
-      <div class="kpi-glow" data-bg="#10b981"></div>
-      <span class="kpi-icon">🛒</span>
-      <div class="kpi-label">Regular Customers</div>
-      <div class="kpi-value">{{ reg_count }}</div>
-      <div class="kpi-delta positive"><i class="bi bi-arrow-up-short"></i> {{ reg_pct }}% of base</div>
-      <div class="kpi-accent-bar" data-bg="linear-gradient(90deg,#10b981,transparent)"></div>
-    </div>
+  <div class="kpi-card">
+    <div class="kpi-icon green"><i class="fa-solid fa-bag-shopping"></i></div>
+    <div class="kpi-value">{{ "{:,}".format(summary.total_orders) }}</div>
+    <div class="kpi-label">Total Orders</div>
   </div>
-  <div class="col-xl-3 col-sm-6">
-    <div class="kpi-card">
-      <div class="kpi-glow" data-bg="#ef4444"></div>
-      <span class="kpi-icon">⚠️</span>
-      <div class="kpi-label">At-Risk Customers</div>
-      <div class="kpi-value">{{ risk_count }}</div>
-      <div class="kpi-delta negative"><i class="bi bi-arrow-down-short"></i> {{ risk_pct }}% — needs action</div>
-      <div class="kpi-accent-bar" data-bg="linear-gradient(90deg,#ef4444,transparent)"></div>
+  <div class="kpi-card">
+    <div class="kpi-icon rose"><i class="fa-solid fa-triangle-exclamation"></i></div>
+    <div class="kpi-value" style="color:#ef4444">{{ at_risk_count }}</div>
+    <div class="kpi-label">Customers You May Lose</div>
+    <div class="insight-actions mt-3">
+      {% for a in risk_actions[:2] %}<div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> {{ a }}</div>{% endfor %}
     </div>
   </div>
 </div>
 
-<!-- Charts Row -->
-<div class="row g-4 mb-4">
-  <div class="col-lg-7">
-    <div class="glass-card">
-      <div class="section-title"><i class="bi bi-pie-chart-fill"></i> Segment Distribution</div>
-      <div id="donutChart" class="chart-wrap"></div>
-    </div>
-  </div>
-  <div class="col-lg-5">
-    <div class="glass-card">
-      <div class="section-title"><i class="bi bi-bar-chart-steps"></i> Breakdown</div>
+<!-- Charts row -->
+<div class="grid-2 mb-6">
 
+  <!-- Category Donut -->
+  <div class="glass-card">
+    <div class="flex-between mb-4">
+      <div class="card-title" style="margin-bottom:0"><i class="fa-solid fa-chart-pie"></i> Customer Categories</div>
+      <div class="period-tabs" id="segViewTabs">
+        <button class="period-tab active" data-view="count">Customers</button>
+        <button class="period-tab" data-view="revenue">Revenue</button>
+        <button class="period-tab" data-view="avg">Avg Spending</button>
+      </div>
+    </div>
+    <div class="chart-container" style="height:260px"><canvas id="segChart"></canvas></div>
+    <div class="mt-4">
       {% for s in seg_breakdown %}
-      <div class="seg-progress-wrap">
-        <div class="seg-progress-header">
-          <span>{{ s.segment }}</span>
-          <span data-color="{{ s.color }}">{{ s.count }} &middot; {{ s.pct }}%</span>
+      <div class="flex-between mb-2">
+        <a href="{{ url_for('customers') }}?category={{ s.category | urlencode }}" class="seg-badge badge-{{ 'vip' if s.segment=='VIP' else 'loyal' if s.segment=='Loyal' else 'regular' if s.segment=='Regular' else 'risk' }}" style="text-decoration:none">
+          {{ s.category }}
+        </a>
+        <div style="flex:1;margin:0 12px">
+          <div class="progress-track"><div class="progress-fill {{ 'green' if s.segment=='VIP' else 'blue' if s.segment=='Loyal' else '' }}" style="width:{{ s.pct }}%"></div></div>
         </div>
-        <div class="seg-progress-track">
-          <div class="seg-progress-fill" data-width="{{ s.pct }}%" data-bg="{{ s.color }}"></div>
-        </div>
+        <span class="text-sm text-muted">{{ "{:,}".format(s.count) }} ({{ s.pct }}%)</span>
       </div>
       {% endfor %}
+    </div>
+  </div>
 
-      <div class="rev-panel">
-        <div class="rev-panel-title">Revenue Overview</div>
-        <div class="rev-row">
-          <span>Avg Customer LTV</span>
-          <span class="fw-bold">{{ avg_ltv }}</span>
-        </div>
-        <div class="rev-row">
-          <span>Total Revenue</span>
-          <span class="fw-bold">{{ total_rev }}</span>
-        </div>
+  <!-- Revenue by Category -->
+  <div class="glass-card">
+    <div class="flex-between mb-4">
+      <div class="card-title" style="margin-bottom:0"><i class="fa-solid fa-chart-bar"></i> Revenue by Customer Category</div>
+    </div>
+    <div class="chart-container" style="height:260px"><canvas id="revChart"></canvas></div>
+    <div class="mt-4 flex-between">
+      <div>
+        <div class="text-sm text-muted">Customers You May Lose</div>
+        <div style="font-size:22px;font-weight:700;color:#ef4444">{{ at_risk_count }}</div>
       </div>
+      <div>
+        <div class="text-sm text-muted">Retention Rate</div>
+        <div style="font-size:22px;font-weight:700;color:{{ '#10b981' if retention_rate>=70 else '#f59e0b' if retention_rate>=50 else '#ef4444' }}">{{ retention_rate }}%</div>
+      </div>
+      <a href="{{ url_for('customers') }}" class="btn btn-outline btn-sm">
+        <i class="fa-solid fa-address-book"></i> All Customers
+      </a>
     </div>
   </div>
 </div>
 
-<!-- Summary Table -->
-<div class="row g-4 mb-4">
-  <div class="col-12">
-    <div class="glass-card">
-      <div class="section-title"><i class="bi bi-table"></i> Segment Performance Summary</div>
-      <div class="table-responsive">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Segment</th>
-              <th>Customers</th>
-              <th>Avg Recency (days)</th>
-              <th>Avg Frequency</th>
-              <th>Avg Spend (₹)</th>
-              <th>Total Revenue (₹)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in summary %}
-            <tr>
-              <td>
-                <span class="seg-badge {% if row.Segment == 'VIP' %}seg-vip{% elif row.Segment == 'Regular' %}seg-reg{% else %}seg-risk{% endif %}">
-                  <span class="dot"></span>{{ row.Segment }}
-                </span>
-              </td>
-              <td>{{ "{:,}".format(row.Customers|int) }}</td>
-              <td>{{ "%.0f"|format(row.Avg_Recency) }}</td>
-              <td>{{ "%.1f"|format(row.Avg_Frequency) }}</td>
-              <td>₹{{ "{:,.2f}".format(row['Avg_Monetary']) }}</td>
-              <td class="fw-semibold" data-color="#a5b4fc">₹{{ "{:,.2f}".format(row['Total_Revenue']) }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
+<!-- Expected Sales Preview -->
+<div class="glass-card mb-6">
+  <div class="flex-between mb-4">
+    <div class="card-title" style="margin-bottom:0"><i class="fa-solid fa-chart-area"></i> Expected Sales (Next 30 Days)</div>
+    <a href="{{ url_for('forecasting') }}" class="btn btn-outline btn-sm">Full Forecast <i class="fa-solid fa-arrow-right"></i></a>
   </div>
+  <div class="chart-container" style="height:220px"><canvas id="forecastChart"></canvas></div>
 </div>
 
-<!-- Revenue Bar Chart -->
-<div class="row g-4">
-  <div class="col-12">
-    <div class="glass-card">
-      <div class="section-title"><i class="bi bi-bar-chart-fill"></i> Total Revenue by Segment</div>
-      <div id="revChart" class="chart-wrap"></div>
+<!-- Category insight cards -->
+<div class="grid-2 mb-6">
+  {% for s in seg_breakdown %}
+  <div class="glass-card">
+    <div class="flex-between mb-2">
+      <span class="seg-badge badge-{{ 'vip' if s.segment=='VIP' else 'loyal' if s.segment=='Loyal' else 'regular' if s.segment=='Regular' else 'risk' }}" style="font-size:13px">
+        {{ s.category }}
+      </span>
+      <span class="fw-700" style="color:var(--text-primary)">{{ "{:,}".format(s.count) }} customers</span>
+    </div>
+    {% if s.actions %}
+    <div class="insight-actions mt-2">
+      {% for action in s.actions %}
+      <div class="insight-action"><i class="fa-solid fa-bolt-lightning"></i> {{ action }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="mt-3">
+      <a href="{{ url_for('customers') }}?category={{ s.category | urlencode }}" class="btn btn-outline btn-sm w-100">
+        View These Customers <i class="fa-solid fa-arrow-right"></i>
+      </a>
     </div>
   </div>
+  {% endfor %}
 </div>
 
-<!-- ── DEMAND FORECASTING SECTION (REFINED) ── -->
-<section id="df-module" class="glass-card mb-4 mt-4">
-  <div class="section-title d-flex justify-content-between align-items-center">
-    <span><i class="bi bi-graph-up"></i> Demand Forecasting Workbench</span>
-    <div id="df-loadingIndicator" style="display: none;">
-      <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
-      <span class="ms-2 small text-muted">Calculating...</span>
-    </div>
-  </div>
-
-  <!-- Error Zone -->
-  <div id="df-errorZone" class="px-3" style="display: none;">
-    <div class="alert alert-danger py-2 small d-flex align-items-center">
-      <i class="bi bi-exclamation-octagon me-2"></i>
-      <span id="df-errorMessage"></span>
-      <button type="button" class="btn-close ms-auto" style="font-size: 0.65rem;" onclick="document.getElementById('df-errorZone').style.display='none'"></button>
-    </div>
-  </div>
-
-  <!-- Controls -->
-  <div class="p-3 mb-3 border-bottom border-secondary-subtle">
-    <form id="df-forecastForm" class="row g-3 align-items-end">
-      <div class="col-md-3">
-        <label class="form-label text-muted small fw-bold">PRODUCT</label>
-        <select class="form-select bg-dark text-white border-secondary shadow-none" id="df-productSelect" required>
-          <option value="" disabled selected>Select a product...</option>
-          <option value="UltraView 4K Monitor">UltraView 4K Monitor</option>
-          <option value="HomeBrew Coffee Maker">HomeBrew Coffee Maker</option>
-          <option value="CloudStep Running Shoes">CloudStep Running Shoes</option>
-          <option value="GlowRadiance Face Serum">GlowRadiance Face Serum</option>
-          <option value="FlexiFit Yoga Mat">FlexiFit Yoga Mat</option>
-          <option value="PowerCore 20k Power Bank">PowerCore 20k Power Bank</option>
-        </select>
-      </div>
-      <div class="col-md-3">
-        <label class="form-label text-muted small fw-bold">HORIZON</label>
-        <select class="form-select bg-dark text-white border-secondary shadow-none" id="df-horizonSelect">
-          <option value="1">1 Month</option>
-          <option value="3" selected>3 Months</option>
-          <option value="6">6 Months</option>
-          <option value="12">12 Months</option>
-        </select>
-      </div>
-      <div class="col-md-3">
-        <label class="form-label text-muted small fw-bold">MODEL</label>
-        <select class="form-select bg-dark text-white border-secondary shadow-none" id="df-modelSelect">
-          <option value="Prophet">Prophet (Meta)</option>
-          <option value="ARIMA">ARIMA</option>
-          <option value="XGBoost">XGBoost</option>
-          <option value="LSTM">LSTM (Deep Learning)</option>
-        </select>
-      </div>
-      <div class="col-md-3">
-        <button type="submit" class="btn btn-primary w-100 fw-bold py-2 shadow-sm" id="df-generateBtn">
-          <i class="bi bi-magic me-2"></i>Generate Forecast
-        </button>
-      </div>
-    </form>
-  </div>
-
-  <!-- KPI Row -->
-  <div class="row g-3 mb-4 px-3" id="df-kpiRow" style="display: none;">
-    <div class="col-md-3">
-      <div class="p-3 border border-secondary rounded bg-opacity-10 bg-white text-center">
-        <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem; letter-spacing: 0.5px;">Projected Volume</div>
-        <div class="h4 mb-0 fw-black text-white" id="df-kpiVolume">—</div>
-      </div>
-    </div>
-    <div class="col-md-3">
-      <div class="p-3 border border-secondary rounded bg-opacity-10 bg-white text-center">
-        <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem; letter-spacing: 0.5px;">Expected Growth</div>
-        <div class="h4 mb-0 fw-black text-white" id="df-kpiGrowth">—</div>
-      </div>
-    </div>
-    <div class="col-md-3">
-      <div class="p-3 border border-secondary rounded bg-opacity-10 bg-white text-center">
-        <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem; letter-spacing: 0.5px;">Peak Demand</div>
-        <div class="h4 mb-0 fw-black text-white" id="df-kpiPeakDate">—</div>
-      </div>
-    </div>
-    <div class="col-md-3">
-      <div class="p-3 border border-secondary rounded bg-opacity-10 bg-white text-center">
-        <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem; letter-spacing: 0.5px;">Risk Status</div>
-        <div class="h4 mb-0 fw-black" id="df-kpiRisk">—</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Chart Area -->
-  <div class="px-3 position-relative">
-    <div id="df-chartOverlay" class="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center rounded" style="background: rgba(8,14,26,0.6); z-index: 5; display: none !important;">
-       <div class="spinner-border text-primary" role="status"></div>
-    </div>
-    <div id="df-forecastChart" class="chart-wrap mb-4" style="height: 400px;">
-      <div class="d-flex align-items-center justify-content-center h-100 text-muted border border-secondary border-dashed rounded bg-dark bg-opacity-25">
-        <div class="text-center">
-          <i class="bi bi-graph-up display-6 mb-2"></i>
-          <p class="small">Select a product above to generate demand predictions.</p>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Insights Footer -->
-  <div class="row g-4 px-3 pb-3" id="df-insightsRow" style="display: none;">
-    <div class="col-lg-6 border-end border-secondary border-opacity-25">
-      <div class="small fw-bold text-uppercase text-indigo mb-3"><i class="bi bi-shield-exclamation me-1"></i> Stock Risk Alerts</div>
-      <div id="df-alertsContainer" class="pe-lg-3"></div>
-    </div>
-    <div class="col-lg-6">
-      <div class="small fw-bold text-uppercase text-emerald mb-3"><i class="bi bi-cart-check me-1"></i> Inventory Recommendations</div>
-      <div class="table-responsive">
-        <table class="data-table small">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Action</th>
-              <th class="text-end">Quantity</th>
-            </tr>
-          </thead>
-          <tbody id="df-recommendationsTable"></tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-</section>
 {% endif %}
 {% endblock %}
 
-{% block page_scripts %}
-<script type="application/json" id="_donutData">{{ chart_donut | safe }}</script>
-<script type="application/json" id="_revData">{{ chart_rev | safe }}</script>
+{% block extra_scripts %}
 <script>
-  // Apply dynamic colours/widths from data-* attributes
-  document.querySelectorAll('[data-bg]').forEach(function(el) {
-    el.style.background = el.getAttribute('data-bg');
-  });
-  document.querySelectorAll('[data-color]').forEach(function(el) {
-    el.style.color = el.getAttribute('data-color');
-  });
-  document.querySelectorAll('[data-width]').forEach(function(el) {
-    el.style.width = el.getAttribute('data-width');
-  });
+const segData = {{ seg_breakdown_json | safe }};
+const revData = {{ rev_json | safe }};
+const fcData  = {{ forecast_preview | safe }};
 
-  renderChart('donutChart', document.getElementById('_donutData').textContent);
-  renderChart('revChart',   document.getElementById('_revData').textContent);
-
-  /**
-   * ── Demand Forecasting Module Controller ──
-   * Managed state and actions for the forecasting section.
-   */
-  const ForecastModule = {
-    elements: {
-      form: document.getElementById('df-forecastForm'),
-      generateBtn: document.getElementById('df-generateBtn'),
-      loadingIndicator: document.getElementById('df-loadingIndicator'),
-      chartOverlay: document.getElementById('df-chartOverlay'),
-      errorZone: document.getElementById('df-errorZone'),
-      errorMessage: document.getElementById('df-errorMessage'),
-      kpiRow: document.getElementById('df-kpiRow'),
-      insightsRow: document.getElementById('df-insightsRow'),
-      chartContainer: document.getElementById('df-forecastChart'),
-      recommendationsTable: document.getElementById('df-recommendationsTable'),
-      alertsContainer: document.getElementById('df-alertsContainer')
+// ── Segment Chart (switchable) ─────────────────────────────
+let segChart;
+function buildSegChart(view) {
+  const ctx = document.getElementById('segChart');
+  if (segChart) segChart.destroy();
+  const vals  = view === 'count'   ? segData.map(s=>s.count)
+              : view === 'revenue' ? segData.map(s=>{const r=revData.find(x=>x.category===s.category); return r?r.Revenue:0;})
+              :                      segData.map(s=>s.avg_monetary||0);
+  segChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: segData.map(s=>s.category),
+      datasets:[{
+        data: vals,
+        backgroundColor: segData.map(s=>s.color),
+        borderWidth: 0, hoverOffset: 6,
+      }]
     },
-
-    init() {
-      if (!this.elements.form) return;
-      this.elements.form.addEventListener('submit', (e) => this.handleGenerate(e));
-    },
-
-    setLoading(isLoading) {
-      const { generateBtn, loadingIndicator, chartOverlay } = this.elements;
-      generateBtn.disabled = isLoading;
-      generateBtn.innerHTML = isLoading 
-        ? `<span class="spinner-border spinner-border-sm me-2"></span>Generating...` 
-        : `<i class="bi bi-magic me-2"></i>Generate Forecast`;
-      
-      loadingIndicator.style.display = isLoading ? 'block' : 'none';
-      if (chartOverlay) chartOverlay.style.setProperty('display', isLoading ? 'flex' : 'none', 'important');
-    },
-
-    showError(msg) {
-      this.elements.errorMessage.textContent = msg || 'An unexpected error occurred.';
-      this.elements.errorZone.style.display = 'block';
-      this.setLoading(false);
-      window.scrollTo({ top: this.elements.errorZone.offsetTop - 100, behavior: 'smooth' });
-    },
-
-    async handleGenerate(e) {
-      e.preventDefault();
-      this.elements.errorZone.style.display = 'none';
-      
-      const payload = {
-        product: document.getElementById('df-productSelect').value,
-        horizon: document.getElementById('df-horizonSelect').value,
-        model: document.getElementById('df-modelSelect').value
-      };
-
-      if (!payload.product) return this.showError('Please select a product first.');
-
-      this.setLoading(true);
-
-      try {
-        const response = await fetch('/api/forecast', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) throw new Error(`Server responded with ${response.status}`);
-        
-        const result = await response.json();
-        if (result.status === 'success') {
-          this.render(result.data);
-        } else {
-          throw new Error(result.message || 'API returned an error state.');
+    options: {
+      cutout:'65%', maintainAspectRatio:false,
+      plugins:{
+        legend:{position:'right', labels:{color:'#94a3b8',boxWidth:12,font:{size:12}}},
+        tooltip:{callbacks:{label:ctx=>{
+          const v = view==='count' ? `${ctx.raw.toLocaleString()} customers`
+                  : view==='revenue' ? `£${ctx.raw.toLocaleString()}`
+                  : `£${ctx.raw.toFixed(2)} avg`;
+          return ` ${ctx.label}: ${v}`;
+        }}}
+      },
+      onClick: (evt, els) => {
+        if (els.length) {
+          const cat = segData[els[0].index].category;
+          window.location.href = `/customers?category=${encodeURIComponent(cat)}`;
         }
-      } catch (err) {
-        console.error('Forecast Error:', err);
-        this.showError(`System error: ${err.message}`);
-      } finally {
-        this.setLoading(false);
       }
-    },
-
-    render(data) {
-      const { kpiRow, insightsRow, recommendationsTable, alertsContainer } = this.elements;
-      
-      // 1. Show Hidden Sections
-      kpiRow.style.display = 'flex';
-      insightsRow.style.display = 'flex';
-
-      // 2. Update KPIs
-      document.getElementById('df-kpiVolume').textContent = data.summary.total;
-      document.getElementById('df-kpiGrowth').textContent = data.summary.growth;
-      document.getElementById('df-kpiPeakDate').textContent = new Date(data.summary.peak_date).toLocaleDateString('en-GB', {month:'short', year:'numeric'});
-      
-      const riskEl = document.getElementById('df-kpiRisk');
-      riskEl.textContent = data.summary.risk;
-      riskEl.className = `h4 mb-0 fw-black ${data.summary.risk === 'High' ? 'text-danger' : 'text-success'}`;
-
-      // 3. Draw Chart
-      this.drawChart(data.historical, data.forecast);
-
-      // 4. Alerts
-      alertsContainer.innerHTML = data.alerts.length 
-        ? data.alerts.map(a => `
-            <div class="alert-box alert-${a.type === 'danger' ? 'risk' : 'warn'} mb-2 py-2 px-3 small">
-              <i class="bi bi-exclamation-circle me-2"></i><span>${a.message}</span>
-            </div>`).join('') 
-        : '<p class="text-muted small text-center p-2">No active risks detected.</p>';
-
-      // 5. Recommendations
-      recommendationsTable.innerHTML = data.recommendations.map(r => `
-        <tr>
-          <td>${new Date(r.date).toLocaleDateString('en-GB', {day:'2-digit', month:'short'})}</td>
-          <td><span class="seg-badge seg-reg py-0 px-2" style="font-size: 0.65rem;">${r.action}</span></td>
-          <td class="text-end fw-bold">${r.quantity.toLocaleString()}</td>
-        </tr>`).join('');
-    },
-
-    drawChart(historical, forecast) {
-      const traceHist = {
-        x: historical.map(d => d.date),
-        y: historical.map(d => d.value),
-        name: 'Historical', type: 'scatter', mode: 'lines',
-        line: { color: '#3b82f6', width: 2.5 }
-      };
-      
-      const traceFore = {
-        x: forecast.map(d => d.date),
-        y: forecast.map(d => d.value),
-        name: 'Forecast', type: 'scatter', mode: 'lines',
-        line: { color: '#a855f7', width: 2.5, dash: 'dash' }
-      };
-
-      const traceCI = {
-        x: [...forecast.map(d => d.date), ...[...forecast].reverse().map(d => d.date)],
-        y: [...forecast.map(d => d.upper), ...[...forecast].reverse().map(d => d.lower)],
-        fill: 'toself', 
-        fillcolor: 'rgba(168, 85, 247, 0.08)',
-        line: { color: 'transparent' }, 
-        name: 'Confidence Interval', 
-        showlegend: false
-      };
-
-      const layout = {
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'Inter', color: '#94a3b8', size: 11 },
-        margin: { l: 45, r: 15, t: 10, b: 40 },
-        hovermode: 'x unified',
-        xaxis: { gridcolor: 'rgba(255,255,255,0.05)', linecolor: 'rgba(255,255,255,0.1)' },
-        yaxis: { gridcolor: 'rgba(255,255,255,0.05)', linecolor: 'rgba(255,255,255,0.1)', title: { text: 'Units', font: { size: 10 } } },
-        legend: { orientation: 'h', y: -0.25, x: 0.5, xanchor: 'center', font: { size: 10 } }
-      };
-
-      Plotly.react('df-forecastChart', [traceCI, traceHist, traceFore], layout, { responsive: true, displayModeBar: false });
     }
-  };
+  });
+}
+buildSegChart('count');
+document.querySelectorAll('#segViewTabs .period-tab').forEach(btn=>{
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('#segViewTabs .period-tab').forEach(b=>b.classList.remove('active'));
+    this.classList.add('active');
+    buildSegChart(this.dataset.view);
+  });
+});
 
-  ForecastModule.init();
+// ── Revenue Bar ────────────────────────────────────────────
+new Chart(document.getElementById('revChart'),{
+  type:'bar',
+  data:{
+    labels:revData.map(r=>r.category),
+    datasets:[{
+      label:'Revenue (£)',
+      data:revData.map(r=>r.Revenue),
+      backgroundColor:revData.map(r=>r.color+'99'),
+      borderColor:revData.map(r=>r.color),
+      borderWidth:1,borderRadius:8,borderSkipped:false,
+    }]
+  },
+  options:{
+    maintainAspectRatio:false,
+    plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>` £${ctx.raw.toLocaleString()}`}}},
+    scales:{
+      x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b'}},
+      y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b',callback:v=>'£'+v.toLocaleString()}}
+    },
+    onClick:(evt,els)=>{
+      if(els.length){const cat=revData[els[0].index].category;window.location.href=`/customers?category=${encodeURIComponent(cat)}`;}
+    }
+  }
+});
+
+// ── Forecast Preview ───────────────────────────────────────
+if(fcData.length){
+  new Chart(document.getElementById('forecastChart'),{
+    type:'line',
+    data:{
+      labels:fcData.map(d=>d.date),
+      datasets:[
+        {label:'Expected Sales',data:fcData.map(d=>d.forecast),borderColor:'#8b5cf6',backgroundColor:'rgba(139,92,246,0.1)',fill:true,tension:0.4,pointRadius:0,borderWidth:2},
+        {label:'Upper',data:fcData.map(d=>d.upper),borderColor:'rgba(139,92,246,0.3)',fill:false,tension:0.4,pointRadius:0,borderWidth:1,borderDash:[4,4]},
+        {label:'Lower',data:fcData.map(d=>d.lower),borderColor:'rgba(139,92,246,0.3)',backgroundColor:'rgba(139,92,246,0.05)',fill:'-1',tension:0.4,pointRadius:0,borderWidth:1,borderDash:[4,4]},
+      ]
+    },
+    options:{
+      maintainAspectRatio:false,
+      interaction:{intersect:false,mode:'index'},
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>` ${ctx.dataset.label}: £${Math.round(ctx.raw).toLocaleString()}`}}},
+      scales:{
+        x:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#475569',maxTicksLimit:8,maxRotation:0}},
+        y:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#475569',callback:v=>'£'+v.toLocaleString()}}
+      }
+    }
+  });
+}
 </script>
 {% endblock %}

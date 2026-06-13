@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Upload Dataset{% endblock %}
+{% block page_title %}<i class="fa-solid fa-file-arrow-up me-2" style="color:#f59e0b"></i>Upload Dataset{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Batch Dataset Upload</h1>
+  <p>Upload a raw retail transaction CSV. The system will compute RFM, run segmentation and churn prediction for every customer.</p>
+</div>
+
+{% if not seg_loaded or not churn_loaded %}
+<div class="info-box warn mb-4"><i class="fa-solid fa-triangle-exclamation"></i> ML models not fully loaded — predictions may fail.</div>
+{% endif %}
+
+{% if form_err %}
+<div class="info-box error mb-4"><i class="fa-solid fa-circle-exclamation"></i> {{ form_err }}</div>
+{% endif %}
+
+{% if form_info %}
+<div class="info-box success mb-4"><i class="fa-solid fa-check-circle"></i> {{ form_info }}</div>
+{% endif %}
+
+<!-- Upload Card -->
+<div class="glass-card mb-6">
+  <div class="card-title"><i class="fa-solid fa-file-csv"></i> Upload Retail Transaction CSV</div>
+  <form method="POST" enctype="multipart/form-data" id="uploadForm">
+    <div class="upload-zone mb-4" id="dropZone" onclick="document.getElementById('fileInput').click()">
+      <div class="upload-icon"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+      <div style="font-size:15px;font-weight:600;color:var(--text-primary);margin-bottom:6px">Drop CSV here or click to browse</div>
+      <div class="text-sm text-muted">Required columns: <code>CustomerID, InvoiceDate, Quantity, UnitPrice</code></div>
+    </div>
+    <input type="file" name="dataset" id="fileInput" accept=".csv" style="display:none" onchange="handleFile(this)">
+    <div id="fileInfo" class="info-box info mb-4" style="display:none">
+      <i class="fa-solid fa-file-csv"></i> <span id="fileName"></span>
+    </div>
+    <button type="submit" class="btn btn-primary" id="uploadBtn">
+      <i class="fa-solid fa-bolt"></i> Process & Run Predictions
+    </button>
+  </form>
+</div>
+
+<!-- Schema Reference -->
+<div class="glass-card mb-6">
+  <div class="card-title"><i class="fa-solid fa-table"></i> Expected CSV Schema</div>
+  <div class="table-wrapper">
+    <table class="analytics-table">
+      <thead><tr><th>Column</th><th>Type</th><th>Description</th><th>Required</th></tr></thead>
+      <tbody>
+        <tr><td style="font-weight:600;color:#8b5cf6">CustomerID</td><td>Numeric</td><td>Unique customer identifier</td><td><span class="seg-badge badge-risk">Required</span></td></tr>
+        <tr><td style="font-weight:600;color:#8b5cf6">InvoiceDate</td><td>Date string</td><td>Transaction date (any parseable format)</td><td><span class="seg-badge badge-risk">Required</span></td></tr>
+        <tr><td style="font-weight:600;color:#8b5cf6">Quantity</td><td>Integer</td><td>Number of items purchased</td><td><span class="seg-badge badge-risk">Required</span></td></tr>
+        <tr><td style="font-weight:600;color:#8b5cf6">UnitPrice</td><td>Float</td><td>Price per item (£)</td><td><span class="seg-badge badge-risk">Required</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Results Table -->
+{% if results %}
+<div class="glass-card">
+  <div class="flex-between mb-4">
+    <div class="card-title" style="margin-bottom:0"><i class="fa-solid fa-list-check"></i> Batch Prediction Results</div>
+    <span class="seg-badge badge-vip">{{ results|length }} customers</span>
+  </div>
+  <div class="table-wrapper">
+    <table class="analytics-table">
+      <thead>
+        <tr><th>Customer ID</th><th>Recency</th><th>Frequency</th><th>Monetary</th><th>Segment</th><th>Churn Risk</th><th>Churn %</th></tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+        <tr>
+          <td style="font-weight:600">{{ r.customer_id }}</td>
+          <td>{{ r.recency|int }}d</td>
+          <td>{{ r.frequency }}</td>
+          <td>£{{ "{:,.2f}".format(r.monetary) }}</td>
+          <td><span class="seg-badge badge-{{ 'vip' if r.segment=='VIP' else 'loyal' if r.segment=='Loyal' else 'regular' if r.segment=='Regular' else 'risk' }}">{{ r.segment }}</span></td>
+          <td><span class="seg-badge badge-{{ 'risk' if 'High' in r.churn_risk else 'warn' if 'Medium' in r.churn_risk else 'safe' }}">{{ r.churn_risk }}</span></td>
+          <td>{{ r.churn_pct }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function handleFile(input) {
+  if (input.files.length > 0) {
+    document.getElementById('fileInfo').style.display = 'flex';
+    document.getElementById('fileName').textContent = input.files[0].name + ' (' + (input.files[0].size/1024).toFixed(1) + ' KB)';
+  }
+}
+
+document.getElementById('uploadForm')?.addEventListener('submit', function() {
+  const btn = document.getElementById('uploadBtn');
+  btn.innerHTML = '<span class="spinner"></span> Processing…';
+  btn.disabled = true;
+});
+
+// Drag & drop
+const zone = document.getElementById('dropZone');
+zone?.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+zone?.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+zone?.addEventListener('drop', e => {
+  e.preventDefault();
+  zone.classList.remove('drag-over');
+  const input = document.getElementById('fileInput');
+  input.files = e.dataTransfer.files;
+  handleFile(input);
+});
+</script>
+{% endblock %}
